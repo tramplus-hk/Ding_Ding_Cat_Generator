@@ -9,7 +9,7 @@ export function StickerDetailPage() {
   const [error, setError] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
-  const [isMutating, setIsMutating] = useState(false);
+  const [activeAction, setActiveAction] = useState<"generate" | "accept" | "reject" | null>(null);
 
   useEffect(() => {
     if (!id) {
@@ -49,7 +49,7 @@ export function StickerDetailPage() {
 
     setError(null);
     setMessage(null);
-    setIsMutating(true);
+    setActiveAction(action);
 
     try {
       if (action === "generate") {
@@ -68,7 +68,7 @@ export function StickerDetailPage() {
     } catch (caughtError) {
       setError(caughtError instanceof Error ? caughtError.message : `Failed to ${action} sticker`);
     } finally {
-      setIsMutating(false);
+      setActiveAction(null);
     }
   }
 
@@ -110,6 +110,10 @@ export function StickerDetailPage() {
                 <dd>{record.type}</dd>
               </div>
               <div>
+                <dt>Generated Asset Path</dt>
+                <dd>{record.result?.localPath ?? "Not generated yet"}</dd>
+              </div>
+              <div>
                 <dt>Theme</dt>
                 <dd>{record.theme}</dd>
               </div>
@@ -124,17 +128,25 @@ export function StickerDetailPage() {
             </dl>
 
             <div className="action-row">
-              <button type="button" disabled={isMutating} onClick={() => void runAction("generate")}>
-                Generate Placeholder
+              <button type="button" disabled={activeAction !== null} onClick={() => void runAction("generate")}>
+                {activeAction === "generate" ? "Generating..." : "Generate Placeholder"}
               </button>
-              <button type="button" disabled={isMutating} onClick={() => void runAction("reject")}>
-                Reject
+              <button type="button" disabled={activeAction !== null} onClick={() => void runAction("reject")}>
+                {activeAction === "reject" ? "Rejecting..." : "Reject"}
               </button>
-              <button type="button" disabled={isMutating} onClick={() => void runAction("accept")}>
-                Accept + Upload
+              <button type="button" disabled={activeAction !== null} onClick={() => void runAction("accept")}>
+                {activeAction === "accept" ? "Uploading..." : "Accept + Upload"}
               </button>
             </div>
           </aside>
+
+          <section className="json-panel full-width">
+            <div className="section-heading compact">
+              <p className="eyebrow">Raw JSON</p>
+              <h3>Cached Record</h3>
+            </div>
+            <pre>{JSON.stringify(record, null, 2)}</pre>
+          </section>
         </div>
       ) : null}
     </section>

@@ -1,6 +1,6 @@
 import type { CreateStickerInput, StickerRecord } from "@sticker-platform/shared";
 import { randomUUID } from "node:crypto";
-import { mkdir, readFile, readdir, rm, rmdir, writeFile } from "node:fs/promises";
+import { access, mkdir, readFile, readdir, rm, rmdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -30,6 +30,13 @@ function getRelativeRecordPath(record: Pick<StickerRecord, "category" | "sticker
 
 async function readRecordFile(filePath: string): Promise<StickerRecord> {
   return JSON.parse(await readFile(filePath, "utf8")) as StickerRecord;
+}
+
+async function pathExists(filePath: string): Promise<boolean> {
+  return access(filePath).then(
+    () => true,
+    () => false,
+  );
 }
 
 async function listRequestJsonFiles(directory: string): Promise<string[]> {
@@ -78,6 +85,18 @@ export async function getStickerRecord(id: string): Promise<StickerRecord | unde
 
 export async function createStickerRecord(input: CreateStickerInput): Promise<StickerRecord> {
   const now = new Date().toISOString();
+  const recordPath = getRecordPath(input);
+
+  if (await pathExists(recordPath)) {
+    const existing = await readRecordFile(recordPath);
+    const error = new Error(
+      `Sticker cache already exists for ${input.category}/${input.stickerContent}: ${existing.id}`,
+    );
+
+    Object.assign(error, { statusCode: 409 });
+    throw error;
+  }
+
   const record: StickerRecord = {
     ...input,
     id: randomUUID(),
@@ -90,7 +109,7 @@ export async function createStickerRecord(input: CreateStickerInput): Promise<St
   const recordDirectory = getRecordDirectory(record);
 
   await mkdir(recordDirectory, { recursive: true });
-  await writeFile(getRecordPath(record), `${JSON.stringify(record, null, 2)}\n`, "utf8");
+  await writeFile(recordPath, `${JSON.stringify(record, null, 2)}\n`, "utf8");
 
   return record;
 }

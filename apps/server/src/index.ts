@@ -26,7 +26,10 @@ app.use((error: unknown, _req: express.Request, res: express.Response, _next: ex
   }
 
   const message = error instanceof Error ? error.message : "Unexpected server error";
-  res.status(500).json({ error: message });
+  const statusCode =
+    error instanceof Error && "statusCode" in error && typeof error.statusCode === "number" ? error.statusCode : 500;
+
+  res.status(statusCode).json({ error: message });
 });
 
 app.listen(config.port, () => {

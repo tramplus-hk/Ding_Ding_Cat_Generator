@@ -3,6 +3,10 @@ import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { createSticker } from "../lib/api";
 
+function getRequiredValue(formData: FormData, fieldName: string): string {
+  return String(formData.get(fieldName) ?? "").trim();
+}
+
 export function GeneratePage() {
   const navigate = useNavigate();
   const [error, setError] = useState<string | null>(null);
@@ -14,14 +18,24 @@ export function GeneratePage() {
     setIsSubmitting(true);
 
     const formData = new FormData(event.currentTarget);
+    const theme = getRequiredValue(formData, "theme");
+    const category = getRequiredValue(formData, "category");
+    const stickerContent = getRequiredValue(formData, "stickerContent");
+    const description = getRequiredValue(formData, "description");
+
+    if (!theme || !category || !stickerContent || !description) {
+      setError("Theme, category, sticker content, and description are required.");
+      setIsSubmitting(false);
+      return;
+    }
 
     try {
       const record = await createSticker({
         type: formData.get("type") === "gif" ? "gif" : "svg",
-        theme: String(formData.get("theme") ?? ""),
-        category: String(formData.get("category") ?? ""),
-        stickerContent: String(formData.get("stickerContent") ?? ""),
-        description: String(formData.get("description") ?? ""),
+        theme,
+        category,
+        stickerContent,
+        description,
       });
 
       navigate(`/stickers/${record.id}`);
@@ -51,22 +65,22 @@ export function GeneratePage() {
 
         <label>
           Theme
-          <input name="theme" placeholder="Cute animal" />
+          <input name="theme" placeholder="Cute animal" required />
         </label>
 
         <label>
           Category
-          <input name="category" placeholder="animals" />
+          <input name="category" placeholder="animals" required />
         </label>
 
         <label>
           Sticker Content
-          <input name="stickerContent" placeholder="cat-coffee" />
+          <input name="stickerContent" placeholder="cat-coffee" required />
         </label>
 
         <label className="full-width">
           Description
-          <textarea name="description" placeholder="A cute cat holding a coffee cup" rows={6} />
+          <textarea name="description" placeholder="A cute cat holding a coffee cup" rows={6} required />
         </label>
 
         {error ? <p className="form-message error full-width">{error}</p> : null}

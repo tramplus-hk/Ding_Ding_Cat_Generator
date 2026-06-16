@@ -2,7 +2,7 @@
 
 Internal sticker generation platform built with Vite, React, TypeScript, and an Express backend. The goal is to let internal users submit sticker prompts, generate sticker assets with Nano Banana 2, review the result, and upload only accepted final JSON records to Notion.
 
-This repository is currently a skeleton. It contains the app structure, shared schemas, placeholder routes, and service boundaries, but it does not yet implement real file persistence, Nano Banana 2 calls, or Notion writes.
+This repository currently implements the local workflow foundation. It contains app structure, shared schemas, file-backed local JSON cache, placeholder generated asset storage, placeholder Nano Banana 2 and Notion service boundaries, and a basic review UI. It does not yet implement real Nano Banana 2 calls or real Notion writes.
 
 ## Architecture
 
@@ -26,8 +26,8 @@ data
 
 1. User submits a sticker request from the web app.
 2. Server creates a local JSON cache record.
-3. Server sends the prompt data to Nano Banana 2.
-4. Generated SVG or GIF output is saved locally.
+3. Server sends the prompt data to the Nano Banana 2 service boundary.
+4. Placeholder SVG or GIF output is saved locally until the real generator is connected.
 5. User reviews the generated sticker in the web app.
 6. If rejected, the record remains local for retry/debugging.
 7. If accepted, the final JSON is uploaded to Notion.
@@ -122,7 +122,17 @@ data/
         request.json
 ```
 
-For the current skeleton, `apps/server/src/services/stickerStorage.ts` uses an in-memory placeholder cache. File-backed JSON persistence is the next implementation step.
+`apps/server/src/services/stickerStorage.ts` persists local JSON cache files to this layout. Accepted records are removed after the upload boundary succeeds, and empty cache folders are pruned automatically.
+
+Generated placeholder assets are saved under:
+
+```txt
+data/generated/
+  <category>/
+    <sticker-content>/
+      result.svg
+      result.gif
+```
 
 ## Environment
 
@@ -182,6 +192,7 @@ npm run dev
 npm run dev:web
 npm run dev:server
 npm run typecheck
+npm run test
 npm run build
 ```
 
@@ -201,9 +212,11 @@ POST   /api/stickers/:id/reject
 
 Current behavior:
 
-- `POST /api/stickers` validates input and creates an in-memory placeholder record.
-- `POST /api/stickers/:id/generate` returns a placeholder Nano Banana 2 result.
-- `POST /api/stickers/:id/accept` returns a placeholder Notion page ID and removes the in-memory cache record.
+- `POST /api/stickers` validates input and creates a local JSON cache record.
+- Duplicate `category + stickerContent` cache paths are rejected to avoid overwriting existing JSON.
+- `POST /api/stickers/:id/generate` writes a placeholder generated asset and updates the cached JSON with `result.localPath`.
+- `POST /api/stickers/:id/accept` returns a placeholder Notion page ID and removes the local JSON cache record.
+- Cache deletion prunes empty parent folders under `data/history`.
 
 ## Notion Strategy
 
@@ -239,14 +252,11 @@ Generated assets should stay local until Notion or another asset store contains 
 
 ## Next Steps
 
-1. Replace in-memory cache with file-backed JSON storage under `data/history`.
-2. Implement generated asset writes under `data/generated`.
-3. Connect `apps/server/src/services/nanoBanana.ts` to the real Nano Banana 2 API.
-4. Connect `apps/server/src/services/notion.ts` to the Notion API.
-5. Wire the frontend form to `POST /api/stickers`.
-6. Add history loading and sticker detail loading from the backend.
-7. Add accept/reject UI actions.
-8. Add error states and retry handling for failed uploads.
+1. Connect `apps/server/src/services/nanoBanana.ts` to the real Nano Banana 2 API.
+2. Connect `apps/server/src/services/notion.ts` to the Notion API.
+3. Add retry handling for failed uploads.
+4. Decide whether accepted generated assets should be kept locally, uploaded to durable storage, or deleted after DB sync.
+5. Add authentication if the tool is exposed outside a trusted internal network.
 
 ## Current Status
 
@@ -254,6 +264,7 @@ Verified commands:
 
 ```bash
 npm run typecheck
+npm run test
 npm run build
 ```
 
