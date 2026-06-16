@@ -7,10 +7,19 @@ import {
   createStickerRecord,
   deleteStickerCache,
   getStickerRecord,
+  persistStickerRecord,
   updateStickerRecord,
 } from "./stickerStorage.js";
 
 const projectRoot = path.resolve(process.cwd(), "../..");
+
+function slugify(value: string): string {
+  return value
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "") || "untitled";
+}
 
 async function exists(filePath: string): Promise<boolean> {
   return access(filePath).then(
@@ -20,7 +29,7 @@ async function exists(filePath: string): Promise<boolean> {
 }
 
 describe("stickerStorage", () => {
-  test("creates, updates, and deletes a cached JSON record", async () => {
+  test("keeps draft records in memory and persists JSON only on accept", async () => {
     const suffix = randomUUID();
     const record = await createStickerRecord({
       format: "svg",
@@ -29,13 +38,18 @@ describe("stickerStorage", () => {
     });
 
     assert.equal(record.status, "pending");
-    assert.equal(record.cachePath, `data/history/test-theme-${suffix}/storage-lifecycle-test/request.json`);
+    assert.equal(record.cachePath, undefined);
 
-    const absoluteCachePath = path.join(projectRoot, record.cachePath);
-    assert.equal(await exists(absoluteCachePath), true);
+    const expectedCachePath = `data/history/test_theme_${slugify(suffix)}/storage_lifecycle_test/request.json`;
+    const absoluteCachePath = path.join(projectRoot, expectedCachePath);
+    assert.equal(await exists(absoluteCachePath), false);
 
     const updated = await updateStickerRecord(record.id, { status: "rejected" });
     assert.equal(updated.status, "rejected");
+
+    const persisted = await persistStickerRecord(record.id);
+    assert.equal(persisted.cachePath, expectedCachePath);
+    assert.equal(await exists(absoluteCachePath), true);
 
     const cachedJson = JSON.parse(await readFile(absoluteCachePath, "utf8")) as { status: string };
     assert.equal(cachedJson.status, "rejected");
@@ -46,7 +60,7 @@ describe("stickerStorage", () => {
     assert.equal(await exists(path.dirname(path.dirname(absoluteCachePath))), false);
   });
 
-  test("rejects duplicate theme and description cache paths", async () => {
+  test("allows duplicate motions and persists them with indexed cache paths", async () => {
     const suffix = randomUUID();
     const input = {
       format: "svg" as const,
@@ -54,9 +68,36 @@ describe("stickerStorage", () => {
       description: "duplicate test",
     };
 
-    const record = await createStickerRecord(input);
+    const first = await createStickerRecord(input);
+    const second = await createStickerRecord(input);
+    const firstPersisted = await persistStickerRecord(first.id);
+    const secondPersisted = await persistStickerRecord(second.id);
 
-    await assert.rejects(() => createStickerRecord(input), /Sticker cache already exists/);
+    assert.equal(firstPersisted.cachePath, `data/history/duplicate_${slugify(suffix)}/duplicate_test/request.json`);
+    assert.equal(secondPersisted.cachePath, `data/history/duplicate_${slugify(suffix)}/duplicate_test_1/request.json`);
+
+    await deleteStickerCache(first.id);
+    await deleteStickerCache(second.id);
+  });
+
+  test("matches history motion name to accepted generated image name", async () => {
+    const suffix = randomUUID();
+    const record = await createStickerRecord({
+      format: "svg",
+      theme: `history ${suffix}`,
+      description: "dance",
+    });
+    const updated = await updateStickerRecord(record.id, {
+      result: {
+        provider: "nano-banana-2",
+        format: "svg",
+        localPath: `data/generated/history_${slugify(suffix)}/dance_2.png`,
+      },
+    });
+    const persisted = await persistStickerRecord(updated.id);
+
+    assert.equal(persisted.cachePath, `data/history/history_${slugify(suffix)}/dance_2/request.json`);
+
     await deleteStickerCache(record.id);
   });
 });

@@ -1,11 +1,11 @@
 import type { CSSProperties, FormEvent } from "react";
 import { useState } from "react";
 import type { StickerRecord } from "@sticker-platform/shared";
-import { acceptSticker, createSticker, generateSticker, rejectSticker } from "../lib/api";
+import { acceptSticker, createSticker, generateSticker, refineSticker, rejectSticker } from "../lib/api";
 
 const FESTIVALS = [
   {
-    id: "lunar",
+    id: "lunar_new_year",
     label: "🧧 Lunar New Year",
     color: "#ef4444",
     glow: "rgba(239, 68, 68, 0.2)",
@@ -95,17 +95,34 @@ function getRequiredValue(formData: FormData, fieldName: string): string {
   return String(formData.get(fieldName) ?? "").trim();
 }
 
+function getGeneratedAssetUrl(filePath: string): string {
+  const assetBaseUrl = import.meta.env.VITE_API_BASE_URL ?? "";
+
+  if (filePath.startsWith("data/generated/")) {
+    return `${assetBaseUrl}/${filePath.replace(/^data\//, "")}`;
+  }
+
+  if (filePath.startsWith(".runtime/generated/")) {
+    return `${assetBaseUrl}/${filePath.replace(/^\.runtime\//, "runtime/")}`;
+  }
+
+  return `${assetBaseUrl}/${filePath}`;
+}
+
 export function GeneratePage() {
   const [festival, setFestival] = useState(FESTIVALS[0]);
   const [isFestivalOpen, setIsFestivalOpen] = useState(false);
   const [description, setDescription] = useState("");
   const [record, setRecord] = useState<StickerRecord | null>(null);
+  const [selectedPath, setSelectedPath] = useState<string | null>(null);
+  const [refinementRequirement, setRefinementRequirement] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const [activeAction, setActiveAction] = useState<"accept" | "reject" | null>(null);
+  const [activeAction, setActiveAction] = useState<"accept" | "reject" | "regenerate" | "refine" | null>(null);
 
-  const generatedAssetUrl = record?.result?.localPath ? `/${record.result.localPath.replace(/^data\//, "")}` : null;
+  const candidates = record?.result?.candidates ?? [];
+  const selectedCandidate = selectedPath ?? record?.result?.selectedPath ?? record?.result?.localPath ?? candidates[0] ?? null;
 
   function applyPick(prompt: string) {
     setDescription(prompt);
@@ -118,9 +135,11 @@ export function GeneratePage() {
     setMessage(null);
     setIsSubmitting(true);
     setRecord(null);
+    setSelectedPath(null);
+    setRefinementRequirement("");
 
     const formData = new FormData(event.currentTarget);
-    const theme = `${festival.label}: ${festival.desc}`;
+    const theme = festival.id;
     const description = getRequiredValue(formData, "description");
 
     if (!description) {
@@ -138,10 +157,64 @@ export function GeneratePage() {
       const generatedRecord = await generateSticker(createdRecord.id);
 
       setRecord(generatedRecord);
+      setSelectedPath(generatedRecord.result?.selectedPath ?? generatedRecord.result?.candidates?.[0] ?? null);
+      setMessage("Pick the best candidate, regenerate all five, or refine the selected one.");
     } catch (caughtError) {
       setError(caughtError instanceof Error ? caughtError.message : "Failed to create sticker request");
     } finally {
       setIsSubmitting(false);
+    }
+  }
+
+  async function handleRegenerate() {
+    if (!record) {
+      return;
+    }
+
+    setError(null);
+    setMessage(null);
+    setActiveAction("regenerate");
+
+    try {
+      const generatedRecord = await generateSticker(record.id);
+      setRecord(generatedRecord);
+      setSelectedPath(generatedRecord.result?.selectedPath ?? generatedRecord.result?.candidates?.[0] ?? null);
+      setRefinementRequirement("");
+      setMessage("Generated five new candidates.");
+    } catch (caughtError) {
+      setError(caughtError instanceof Error ? caughtError.message : "Failed to regenerate candidates");
+    } finally {
+      setActiveAction(null);
+    }
+  }
+
+  async function handleRefine() {
+    if (!record || !selectedCandidate) {
+      return;
+    }
+
+    if (!refinementRequirement.trim()) {
+      setError("Describe what to refine before sending it back to the model.");
+      return;
+    }
+
+    setError(null);
+    setMessage(null);
+    setActiveAction("refine");
+
+    try {
+      const refinedRecord = await refineSticker(record.id, {
+        selectedPath: selectedCandidate,
+        requirement: refinementRequirement.trim(),
+      });
+      setRecord(refinedRecord);
+      setSelectedPath(refinedRecord.result?.selectedPath ?? refinedRecord.result?.candidates?.[0] ?? null);
+      setRefinementRequirement("");
+      setMessage("Refined into five new candidates. Pick one or refine again.");
+    } catch (caughtError) {
+      setError(caughtError instanceof Error ? caughtError.message : "Failed to refine selected candidate");
+    } finally {
+      setActiveAction(null);
     }
   }
 
@@ -159,9 +232,11 @@ export function GeneratePage() {
         setRecord(await rejectSticker(record.id));
         setMessage("Rejected. The local JSON remains available in history for retry or review.");
       } else {
-        await acceptSticker(record.id);
+        await acceptSticker(record.id, { selectedPath: selectedCandidate ?? undefined });
         setRecord(null);
+        setSelectedPath(null);
         setDescription("");
+        setRefinementRequirement("");
         setMessage("Accepted and uploaded. The local JSON cache was removed.");
       }
     } catch (caughtError) {
@@ -221,7 +296,7 @@ export function GeneratePage() {
               onClick={() => setIsFestivalOpen(false)}
             />
             <button className="primary-button" type="submit" disabled={isSubmitting || !description.trim()}>
-              {isSubmitting ? "⏳ Generate" : "✦ Generate"}
+              {isSubmitting ? "⏳ Generate five" : "✦ Generate five"}
             </button>
           </div>
         </div>
@@ -258,25 +333,57 @@ export function GeneratePage() {
 
         {!isSubmitting && record ? (
           <div className="result-display">
-            {generatedAssetUrl && record.format === "svg" ? (
-              <img className="sticker-pop result-image" src={generatedAssetUrl} alt={record.description} />
-            ) : (
-              <div className="result-file-card">
-                <span>{record.format.toUpperCase()}</span>
-                <strong>{record.result?.localPath ?? "Generated file pending"}</strong>
-              </div>
-            )}
+            <div className="candidate-grid">
+              {candidates.map((candidatePath, index) => {
+                const candidateUrl = getGeneratedAssetUrl(candidatePath);
+                const isSelected = candidatePath === selectedCandidate;
+
+                return (
+                  <button
+                    className={isSelected ? "candidate-card selected" : "candidate-card"}
+                    key={candidatePath}
+                    type="button"
+                    onClick={() => setSelectedPath(candidatePath)}
+                  >
+                    <span>Candidate {index + 1}</span>
+                    {candidatePath.endsWith(".svg") || candidatePath.endsWith(".png") || candidatePath.endsWith(".jpg") || candidatePath.endsWith(".webp") ? (
+                      <img src={candidateUrl} alt={`Candidate ${index + 1}: ${record.description}`} />
+                    ) : (
+                      <strong>{candidatePath}</strong>
+                    )}
+                  </button>
+                );
+              })}
+            </div>
 
             <div className="result-meta">
-              <p>{record.description}</p>
-              <span>{record.result?.localPath ?? "No generated asset path yet"}</span>
+              <p>{selectedCandidate ? "Selected candidate" : "Choose one candidate"}</p>
+              <span>{selectedCandidate ?? "No candidate selected yet"}</span>
+            </div>
+
+            <div className="refine-box">
+              <label>
+                Fine-tune requirement
+                <textarea
+                  placeholder="e.g. make the lantern bigger, simplify the background, keep the same pose"
+                  rows={3}
+                  value={refinementRequirement}
+                  onChange={(event) => setRefinementRequirement(event.target.value)}
+                />
+              </label>
+              <button type="button" disabled={activeAction !== null || !selectedCandidate} onClick={() => void handleRefine()}>
+                {activeAction === "refine" ? "Refining..." : "Refine selected"}
+              </button>
             </div>
 
             <div className="result-actions">
+              <button type="button" disabled={activeAction !== null} onClick={() => void handleRegenerate()}>
+                {activeAction === "regenerate" ? "Regenerating..." : "Regenerate five"}
+              </button>
               <button type="button" disabled={activeAction !== null} onClick={() => void handleDecision("reject")}>
                 {activeAction === "reject" ? "Rejecting..." : "Reject"}
               </button>
-              <button type="button" disabled={activeAction !== null} onClick={() => void handleDecision("accept")}>
+              <button type="button" disabled={activeAction !== null || !selectedCandidate} onClick={() => void handleDecision("accept")}>
                 {activeAction === "accept" ? "Uploading..." : "Accept + upload"}
               </button>
             </div>

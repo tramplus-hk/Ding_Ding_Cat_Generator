@@ -2,8 +2,8 @@ node_modules/
 dist/
 .env
 .DS_Store
-data/history/
-data/generated/
+data/
 apps/server/data/
+.runtime/
 *.log
 *.tsbuildinfo

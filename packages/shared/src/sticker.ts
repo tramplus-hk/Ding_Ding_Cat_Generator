@@ -24,6 +24,10 @@ export const stickerResultSchema = z.object({
   provider: z.literal("nano-banana-2"),
   format: stickerFormatSchema,
   localPath: z.string().optional(),
+  fileUrl: z.string().optional(),
+  selectedPath: z.string().optional(),
+  candidates: z.array(z.string()).optional(),
+  refinementRequirement: z.string().optional(),
   notionPageId: z.string().optional(),
 });
 

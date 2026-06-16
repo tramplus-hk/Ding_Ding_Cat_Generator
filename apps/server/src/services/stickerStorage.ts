@@ -7,13 +7,14 @@ import { fileURLToPath } from "node:url";
 const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../../..");
 const historyRoot = path.join(projectRoot, "data/history");
 const recordFileName = "request.json";
+const runtimeRecords = new Map<string, StickerRecord>();
 
 function slugify(value: string): string {
   return value
     .trim()
     .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "") || "untitled";
+    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "") || "untitled";
 }
 
 function getRecordDirectory(record: Pick<StickerRecord, "theme" | "description">): string {
@@ -24,8 +25,8 @@ function getRecordPath(record: Pick<StickerRecord, "theme" | "description">): st
   return path.join(getRecordDirectory(record), recordFileName);
 }
 
-function getRelativeRecordPath(record: Pick<StickerRecord, "theme" | "description">): string {
-  return path.relative(projectRoot, getRecordPath(record));
+function getStoredRecordPath(record: Pick<StickerRecord, "theme" | "description" | "cachePath">): string {
+  return record.cachePath ? path.join(projectRoot, record.cachePath) : getRecordPath(record);
 }
 
 async function readRecordFile(filePath: string): Promise<StickerRecord> {
@@ -37,6 +38,34 @@ async function pathExists(filePath: string): Promise<boolean> {
     () => true,
     () => false,
   );
+}
+
+async function getAvailableRecordPath(record: Pick<StickerRecord, "theme" | "description">): Promise<string> {
+  const themeDirectory = path.join(historyRoot, slugify(record.theme));
+  const baseName = slugify(record.description);
+  let index = 0;
+
+  while (true) {
+    const candidateName = index === 0 ? baseName : `${baseName}_${index}`;
+    const candidatePath = path.join(themeDirectory, candidateName, recordFileName);
+
+    if (!(await pathExists(candidatePath))) {
+      return candidatePath;
+    }
+
+    index += 1;
+  }
+}
+
+function getRecordPathForFinalImage(record: StickerRecord): string | undefined {
+  if (!record.result?.localPath?.startsWith("data/generated/")) {
+    return undefined;
+  }
+
+  const relativeFinalPath = path.relative(path.join(projectRoot, "data/generated"), path.join(projectRoot, record.result.localPath));
+  const parsedFinalPath = path.parse(relativeFinalPath);
+
+  return path.join(historyRoot, parsedFinalPath.dir, parsedFinalPath.name, recordFileName);
 }
 
 async function listRequestJsonFiles(directory: string): Promise<string[]> {
@@ -75,39 +104,32 @@ export async function listStickerRecords(): Promise<StickerRecord[]> {
   const filePaths = await listRequestJsonFiles(historyRoot);
   const records = await Promise.all(filePaths.map(readRecordFile));
 
-  return records.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+  return [...runtimeRecords.values(), ...records].sort((a, b) => b.createdAt.localeCompare(a.createdAt));
 }
 
 export async function getStickerRecord(id: string): Promise<StickerRecord | undefined> {
+  const runtimeRecord = runtimeRecords.get(id);
+
+  if (runtimeRecord) {
+    return runtimeRecord;
+  }
+
   const records = await listStickerRecords();
   return records.find((record) => record.id === id);
 }
 
 export async function createStickerRecord(input: CreateStickerInput): Promise<StickerRecord> {
   const now = new Date().toISOString();
-  const recordPath = getRecordPath(input);
-
-  if (await pathExists(recordPath)) {
-    const existing = await readRecordFile(recordPath);
-    const error = new Error(`Sticker cache already exists for this theme and description: ${existing.id}`);
-
-    Object.assign(error, { statusCode: 409 });
-    throw error;
-  }
 
   const record: StickerRecord = {
     ...input,
     id: randomUUID(),
     status: "pending",
-    cachePath: getRelativeRecordPath(input),
     createdAt: now,
     updatedAt: now,
   };
 
-  const recordDirectory = getRecordDirectory(record);
-
-  await mkdir(recordDirectory, { recursive: true });
-  await writeFile(recordPath, `${JSON.stringify(record, null, 2)}\n`, "utf8");
+  runtimeRecords.set(record.id, record);
 
   return record;
 }
@@ -125,23 +147,57 @@ export async function updateStickerRecord(
   const updated = {
     ...existing,
     ...patch,
-    cachePath: getRelativeRecordPath({ ...existing, ...patch }),
+    cachePath: existing.cachePath,
     updatedAt: new Date().toISOString(),
   };
 
-  await writeFile(getRecordPath(updated), `${JSON.stringify(updated, null, 2)}\n`, "utf8");
+  if (updated.cachePath) {
+    await writeFile(getStoredRecordPath(updated), `${JSON.stringify(updated, null, 2)}\n`, "utf8");
+  } else {
+    runtimeRecords.set(id, updated);
+  }
 
   return updated;
+}
+
+export async function persistStickerRecord(id: string): Promise<StickerRecord> {
+  const existing = await getStickerRecord(id);
+
+  if (!existing) {
+    throw new Error(`Sticker record not found: ${id}`);
+  }
+
+  const recordPath = existing.cachePath
+    ? getStoredRecordPath(existing)
+    : (getRecordPathForFinalImage(existing) ?? (await getAvailableRecordPath(existing)));
+  const persisted = {
+    ...existing,
+    cachePath: path.relative(projectRoot, recordPath),
+    updatedAt: new Date().toISOString(),
+  };
+  const recordDirectory = path.dirname(recordPath);
+
+  await mkdir(recordDirectory, { recursive: true });
+  await writeFile(recordPath, `${JSON.stringify(persisted, null, 2)}\n`, "utf8");
+  runtimeRecords.delete(id);
+
+  return persisted;
 }
 
 export async function deleteStickerCache(id: string): Promise<void> {
   const record = await getStickerRecord(id);
 
+  runtimeRecords.delete(id);
+
   if (!record) {
     return;
   }
 
-  const recordDirectory = getRecordDirectory(record);
+  if (!record.cachePath) {
+    return;
+  }
+
+  const recordDirectory = path.dirname(getStoredRecordPath(record));
 
   await rm(recordDirectory, { force: true, recursive: true });
   await removeEmptyParentDirectories(recordDirectory);
