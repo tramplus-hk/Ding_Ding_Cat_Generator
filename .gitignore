@@ -5,3 +5,4 @@ dist/
 data/history/
 data/generated/
 *.log
+*.tsbuildinfo
