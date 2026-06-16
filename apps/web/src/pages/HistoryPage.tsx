@@ -1,5 +1,4 @@
 import { useEffect, useState } from "react";
-import { Link } from "react-router-dom";
 import type { StickerRecord } from "@sticker-platform/shared";
 import { listStickers } from "../lib/api";
 
@@ -48,7 +47,7 @@ export function HistoryPage() {
       {records.length > 0 ? (
         <div className="record-list">
           {records.map((record) => (
-            <Link className="record-card" key={record.id} to={`/stickers/${record.id}`}>
+            <article className="record-card" key={record.id}>
               <div>
                 <p className="eyebrow">{record.status}</p>
                 <h3>{record.description}</h3>
@@ -68,7 +67,7 @@ export function HistoryPage() {
                   <dd>{record.cachePath ?? "Not available"}</dd>
                 </div>
               </dl>
-            </Link>
+            </article>
           ))}
         </div>
       ) : null}

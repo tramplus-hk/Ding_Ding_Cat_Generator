@@ -441,7 +441,7 @@ dd {
   text-align: center;
 }
 
-.sticker-canvas div {
+.canvas-state > div {
   font-size: 44px;
   opacity: 0.12;
 }
@@ -450,6 +450,89 @@ dd {
   color: #333;
   font-size: 18px;
   font-weight: 500;
+}
+
+.canvas-state {
+  align-items: center;
+  display: grid;
+  gap: 10px;
+  justify-items: center;
+}
+
+.canvas-state.muted {
+  opacity: 1;
+}
+
+.result-display {
+  align-items: center;
+  display: grid;
+  gap: 16px;
+  justify-items: center;
+  width: 100%;
+}
+
+.result-image {
+  background: #111;
+  border: 1.5px solid #303030;
+  border-radius: 16px;
+  max-height: 220px;
+  max-width: min(360px, 100%);
+  object-fit: contain;
+  padding: 14px;
+}
+
+.result-file-card {
+  background: #111;
+  border: 1.5px solid #303030;
+  border-radius: 16px;
+  display: grid;
+  gap: 8px;
+  max-width: 100%;
+  padding: 20px;
+}
+
+.result-file-card span {
+  color: var(--festival-color);
+  font-size: 12px;
+  font-weight: 900;
+  letter-spacing: 0.14em;
+}
+
+.result-file-card strong {
+  color: #d4d4d4;
+  font-size: 14px;
+  overflow-wrap: anywhere;
+}
+
+.result-meta {
+  display: grid;
+  gap: 6px;
+  max-width: 520px;
+}
+
+.result-meta p {
+  color: #d4d4d4;
+  font-size: 16px;
+  margin: 0;
+}
+
+.result-meta span {
+  color: #666;
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.result-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  justify-content: center;
+}
+
+.result-actions button:last-child {
+  background: var(--festival-color);
+  border-color: var(--festival-color);
+  box-shadow: 0 16px 36px var(--festival-glow);
 }
 
 .credit-line {

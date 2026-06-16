@@ -4,7 +4,6 @@ import { createBrowserRouter, RouterProvider } from "react-router-dom";
 import { App } from "./App";
 import { GeneratePage } from "./pages/GeneratePage";
 import { HistoryPage } from "./pages/HistoryPage";
-import { StickerDetailPage } from "./pages/StickerDetailPage";
 import "./styles.css";
 
 const router = createBrowserRouter([
@@ -14,7 +13,6 @@ const router = createBrowserRouter([
     children: [
       { index: true, element: <GeneratePage /> },
       { path: "history", element: <HistoryPage /> },
-      { path: "stickers/:id", element: <StickerDetailPage /> },
     ],
   },
 ]);

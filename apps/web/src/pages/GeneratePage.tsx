@@ -1,7 +1,7 @@
 import type { CSSProperties, FormEvent } from "react";
 import { useState } from "react";
-import { useNavigate } from "react-router-dom";
-import { createSticker } from "../lib/api";
+import type { StickerRecord } from "@sticker-platform/shared";
+import { acceptSticker, createSticker, generateSticker, rejectSticker } from "../lib/api";
 
 const FESTIVALS = [
   {
@@ -96,12 +96,16 @@ function getRequiredValue(formData: FormData, fieldName: string): string {
 }
 
 export function GeneratePage() {
-  const navigate = useNavigate();
   const [festival, setFestival] = useState(FESTIVALS[0]);
   const [isFestivalOpen, setIsFestivalOpen] = useState(false);
   const [description, setDescription] = useState("");
+  const [record, setRecord] = useState<StickerRecord | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [message, setMessage] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [activeAction, setActiveAction] = useState<"accept" | "reject" | null>(null);
+
+  const generatedAssetUrl = record?.result?.localPath ? `/${record.result.localPath.replace(/^data\//, "")}` : null;
 
   function applyPick(prompt: string) {
     setDescription(prompt);
@@ -111,7 +115,9 @@ export function GeneratePage() {
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setError(null);
+    setMessage(null);
     setIsSubmitting(true);
+    setRecord(null);
 
     const formData = new FormData(event.currentTarget);
     const theme = `${festival.label}: ${festival.desc}`;
@@ -124,17 +130,44 @@ export function GeneratePage() {
     }
 
     try {
-      const record = await createSticker({
+      const createdRecord = await createSticker({
         format: "svg",
         theme,
         description,
       });
+      const generatedRecord = await generateSticker(createdRecord.id);
 
-      navigate(`/stickers/${record.id}`);
+      setRecord(generatedRecord);
     } catch (caughtError) {
       setError(caughtError instanceof Error ? caughtError.message : "Failed to create sticker request");
     } finally {
       setIsSubmitting(false);
+    }
+  }
+
+  async function handleDecision(action: "accept" | "reject") {
+    if (!record) {
+      return;
+    }
+
+    setError(null);
+    setMessage(null);
+    setActiveAction(action);
+
+    try {
+      if (action === "reject") {
+        setRecord(await rejectSticker(record.id));
+        setMessage("Rejected. The local JSON remains available in history for retry or review.");
+      } else {
+        await acceptSticker(record.id);
+        setRecord(null);
+        setDescription("");
+        setMessage("Accepted and uploaded. The local JSON cache was removed.");
+      }
+    } catch (caughtError) {
+      setError(caughtError instanceof Error ? caughtError.message : `Failed to ${action} sticker`);
+    } finally {
+      setActiveAction(null);
     }
   }
 
@@ -205,11 +238,50 @@ export function GeneratePage() {
         </div>
 
         {error ? <p className="form-message error full-width">{error}</p> : null}
+        {message ? <p className="form-message success full-width">{message}</p> : null}
       </form>
 
       <div className="sticker-canvas" onClick={() => setIsFestivalOpen(false)}>
-        <div className={isSubmitting ? "cat-bounce" : ""}>🐾</div>
-        <p>{isSubmitting ? "Ding Ding is saving..." : "Your sticker will appear here"}</p>
+        {isSubmitting ? (
+          <div className="canvas-state">
+            <div className="cat-bounce">🐱</div>
+            <p>Ding Ding is generating...</p>
+          </div>
+        ) : null}
+
+        {!isSubmitting && !record ? (
+          <div className="canvas-state muted">
+            <div>🐾</div>
+            <p>Your sticker will appear here</p>
+          </div>
+        ) : null}
+
+        {!isSubmitting && record ? (
+          <div className="result-display">
+            {generatedAssetUrl && record.format === "svg" ? (
+              <img className="sticker-pop result-image" src={generatedAssetUrl} alt={record.description} />
+            ) : (
+              <div className="result-file-card">
+                <span>{record.format.toUpperCase()}</span>
+                <strong>{record.result?.localPath ?? "Generated file pending"}</strong>
+              </div>
+            )}
+
+            <div className="result-meta">
+              <p>{record.description}</p>
+              <span>{record.result?.localPath ?? "No generated asset path yet"}</span>
+            </div>
+
+            <div className="result-actions">
+              <button type="button" disabled={activeAction !== null} onClick={() => void handleDecision("reject")}>
+                {activeAction === "reject" ? "Rejecting..." : "Reject"}
+              </button>
+              <button type="button" disabled={activeAction !== null} onClick={() => void handleDecision("accept")}>
+                {activeAction === "accept" ? "Uploading..." : "Accept + upload"}
+              </button>
+            </div>
+          </div>
+        ) : null}
       </div>
 
       <p className="credit-line">Made with love by Tramplus · Powered by Gemini Nano Banana 2</p>
