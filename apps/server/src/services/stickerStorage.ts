@@ -5,9 +5,19 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { config } from "../config.js";
 import { listNotionHistoryRecords } from "./notion.js";
+import {
+  deleteRuntimeAssetBlobs,
+  deleteRuntimeBlobRun,
+  deleteRuntimeRecordBlob,
+  listRuntimeRecordBlobs,
+  readRuntimeRecordBlob,
+  shouldUseRuntimeBlob,
+  writeRuntimeRecordBlob,
+} from "./runtimeBlob.js";
 
 const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../../..");
 const historyRoot = path.join(projectRoot, "data/history");
+const runtimeRecordsRoot = config.runtimeRecordsRoot;
 const runtimeRecords = new Map<string, StickerRecord>();
 const isRunningNodeTest = process.argv.some((argument) => argument.includes("--test")) || process.env.npm_lifecycle_event === "test";
 
@@ -37,6 +47,49 @@ function getStoredRecordPath(record: Pick<StickerRecord, "theme" | "description"
 
 async function readRecordFile(filePath: string): Promise<StickerRecord> {
   return JSON.parse(await readFile(filePath, "utf8")) as StickerRecord;
+}
+
+function getRuntimeRecordPath(id: string): string {
+  return path.join(runtimeRecordsRoot, `${id}.json`);
+}
+
+async function writeRuntimeRecord(record: StickerRecord): Promise<void> {
+  runtimeRecords.set(record.id, record);
+
+  if (shouldUseRuntimeBlob()) {
+    await writeRuntimeRecordBlob(record);
+    return;
+  }
+
+  await mkdir(runtimeRecordsRoot, { recursive: true });
+  await writeFile(getRuntimeRecordPath(record.id), `${JSON.stringify(record, null, 2)}\n`, "utf8");
+}
+
+async function readRuntimeRecord(id: string): Promise<StickerRecord | undefined> {
+  const blobRecord = await readRuntimeRecordBlob(id);
+
+  if (blobRecord) {
+    return blobRecord;
+  }
+
+  return readRecordFile(getRuntimeRecordPath(id)).catch(() => undefined);
+}
+
+async function listRuntimeRecords(): Promise<StickerRecord[]> {
+  const blobRecords = await listRuntimeRecordBlobs();
+
+  if (blobRecords.length > 0) {
+    return blobRecords;
+  }
+
+  const entries = await readdir(runtimeRecordsRoot, { withFileTypes: true }).catch(() => []);
+  const records = await Promise.all(
+    entries
+      .filter((entry) => entry.isFile() && path.extname(entry.name) === ".json")
+      .map((entry) => readRecordFile(path.join(runtimeRecordsRoot, entry.name)).catch(() => undefined)),
+  );
+
+  return records.filter((record): record is StickerRecord => Boolean(record));
 }
 
 async function pathExists(filePath: string): Promise<boolean> {
@@ -107,16 +160,19 @@ async function removeEmptyParentDirectories(startDirectory: string): Promise<voi
 }
 
 export async function listStickerRecords(): Promise<StickerRecord[]> {
+  const draftRecords = [...runtimeRecords.values(), ...(await listRuntimeRecords())];
+  const uniqueDraftRecords = Array.from(new Map(draftRecords.map((record) => [record.id, record])).values());
+
   if (shouldUseNotionStorage()) {
     const records = await listNotionHistoryRecords();
 
-    return [...runtimeRecords.values(), ...records].sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+    return [...uniqueDraftRecords, ...records].sort((a, b) => b.createdAt.localeCompare(a.createdAt));
   }
 
   const filePaths = await listRequestJsonFiles(historyRoot);
   const records = await Promise.all(filePaths.map(readRecordFile));
 
-  return [...runtimeRecords.values(), ...records].sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+  return [...uniqueDraftRecords, ...records].sort((a, b) => b.createdAt.localeCompare(a.createdAt));
 }
 
 export async function getStickerRecord(id: string): Promise<StickerRecord | undefined> {
@@ -124,6 +180,13 @@ export async function getStickerRecord(id: string): Promise<StickerRecord | unde
 
   if (runtimeRecord) {
     return runtimeRecord;
+  }
+
+  const persistedRuntimeRecord = await readRuntimeRecord(id);
+
+  if (persistedRuntimeRecord) {
+    runtimeRecords.set(id, persistedRuntimeRecord);
+    return persistedRuntimeRecord;
   }
 
   const records = await listStickerRecords();
@@ -141,7 +204,7 @@ export async function createStickerRecord(input: CreateStickerInput): Promise<St
     updatedAt: now,
   };
 
-  runtimeRecords.set(record.id, record);
+  await writeRuntimeRecord(record);
 
   return record;
 }
@@ -165,13 +228,13 @@ export async function updateStickerRecord(
 
   if (updated.cachePath) {
     if (shouldUseNotionStorage()) {
-      runtimeRecords.set(id, updated);
+      await writeRuntimeRecord(updated);
       return updated;
     }
 
     await writeFile(getStoredRecordPath(updated), `${JSON.stringify(updated, null, 2)}\n`, "utf8");
   } else {
-    runtimeRecords.set(id, updated);
+    await writeRuntimeRecord(updated);
   }
 
   return updated;
@@ -195,6 +258,7 @@ export async function persistStickerRecord(id: string): Promise<StickerRecord> {
 
   if (shouldUseNotionStorage()) {
     runtimeRecords.delete(id);
+    await deleteRuntimeRecordBlob(id);
     return persisted;
   }
 
@@ -203,14 +267,22 @@ export async function persistStickerRecord(id: string): Promise<StickerRecord> {
   await mkdir(recordDirectory, { recursive: true });
   await writeFile(recordPath, `${JSON.stringify(persisted, null, 2)}\n`, "utf8");
   runtimeRecords.delete(id);
+  await rm(getRuntimeRecordPath(id), { force: true });
+  await deleteRuntimeRecordBlob(id);
 
   return persisted;
+}
+
+export async function deleteStickerRuntimeAssets(id: string): Promise<void> {
+  await deleteRuntimeAssetBlobs(id);
 }
 
 export async function deleteStickerCache(id: string): Promise<void> {
   const record = await getStickerRecord(id);
 
   runtimeRecords.delete(id);
+  await rm(getRuntimeRecordPath(id), { force: true });
+  await deleteRuntimeBlobRun(id);
 
   if (!record || shouldUseNotionStorage()) {
     return;

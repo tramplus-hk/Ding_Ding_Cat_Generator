@@ -4,10 +4,11 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { config } from "../config.js";
 import { listDataFolderFileUrls } from "./notion.js";
+import { uploadRuntimeCandidateBlob } from "./runtimeBlob.js";
 
 const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../../..");
 const generatedRoot = path.join(projectRoot, "data/generated");
-const runtimeGeneratedRoot = path.join(projectRoot, ".runtime/generated");
+const runtimeGeneratedRoot = config.runtimeGeneratedRoot;
 const baselineRoot = path.join(projectRoot, "data/baseline");
 const maxBaselineReferences = 8;
 const maxThemeHistoryReferences = 8;
@@ -29,9 +30,10 @@ type ImageResponse = {
 type GenerateOptions = {
   count?: number;
   selectedImagePath?: string;
+  selectedImageUrl?: string;
   refinementRequirement?: string;
   referenceImagePath?: string;
-  onProgress?: (current: number, total: number, candidatePath: string) => void;
+  onProgress?: (current: number, total: number, candidatePath: string, previewDataUrl?: string) => void;
 };
 
 function slugify(value: string): string {
@@ -67,6 +69,7 @@ function buildPlaceholderSvg(record: StickerRecord): string {
 </svg>
 `;
 }
+
 
 function buildGenerationPrompt(record: StickerRecord, options: GenerateOptions = {}, variationIndex?: number): string {
   const referenceBlock = options.referenceImagePath
@@ -166,12 +169,18 @@ async function loadReferenceImageParts(record: StickerRecord): Promise<OpenAiCon
   return Promise.all(references.map(imagePathToContentPart));
 }
 
-async function loadSelectedImagePart(selectedImagePath?: string): Promise<OpenAiContentPart[]> {
+async function loadSelectedImagePart(selectedImagePath?: string, selectedImageUrl?: string): Promise<OpenAiContentPart[]> {
+  if (selectedImageUrl) {
+    return [{ type: "image_url", image_url: { url: selectedImageUrl } }];
+  }
+
   if (!selectedImagePath) {
     return [];
   }
 
-  const absolutePath = path.resolve(projectRoot, selectedImagePath);
+  const absolutePath = selectedImagePath.startsWith(".runtime/generated/")
+    ? path.resolve(runtimeGeneratedRoot, path.relative(".runtime/generated", selectedImagePath))
+    : path.resolve(projectRoot, selectedImagePath);
   const isRuntimeGeneratedPath =
     absolutePath === runtimeGeneratedRoot || absolutePath.startsWith(`${runtimeGeneratedRoot}${path.sep}`);
 
@@ -304,7 +313,7 @@ async function generateWithNanoBanana(
   for (let attempt = 0; attempt <= maxGenerationRetries; attempt++) {
     const content: OpenAiContentPart[] = [
       ...(await loadReferenceImageParts(record)),
-      ...(await loadSelectedImagePart(currentOptions.selectedImagePath)),
+      ...(await loadSelectedImagePart(currentOptions.selectedImagePath, currentOptions.selectedImageUrl)),
       ...(await loadUserReferencePart(currentOptions.referenceImagePath)),
       { type: "text", text: buildGenerationPrompt(record, currentOptions, variationIndex) },
     ];
@@ -392,6 +401,8 @@ export async function generateSticker(record: StickerRecord, options: GenerateOp
   await mkdir(trialDirectory, { recursive: true });
 
   let completedCount = 0;
+  const candidates: string[] = [];
+  const candidateUrls: Record<string, string> = {};
 
   const tasks = Array.from({ length: count }, async (_, i) => {
     const index = i + 1;
@@ -410,23 +421,32 @@ export async function generateSticker(record: StickerRecord, options: GenerateOp
       await writeFile(absolutePath, buildPlaceholderSvg(record), "utf8");
     }
 
-    const relativePath = path.relative(projectRoot, absolutePath).replace(/\\/g, "/");
+    const candidatePath = path.join(".runtime/generated", path.relative(runtimeGeneratedRoot, absolutePath)).replace(/\\/g, "/");
+    const mime = `image/${path.extname(absolutePath).toLowerCase() === ".svg" ? "svg+xml" : "png"}`;
+    const raw = await readFile(absolutePath);
+    const preview = `data:${mime};base64,${raw.toString("base64")}`;
+
+    const blobPathname = await uploadRuntimeCandidateBlob(record.id, candidatePath, absolutePath);
+    if (blobPathname) {
+      candidateUrls[candidatePath] = blobPathname;
+    }
 
     completedCount += 1;
-    options.onProgress?.(completedCount, count, relativePath);
+    options.onProgress?.(completedCount, count, candidatePath, preview);
 
-    return { index, relativePath };
+    return { index, candidatePath };
   });
 
   const settled = await Promise.all(tasks);
 
   settled.sort((a, b) => a.index - b.index);
-  const candidates = settled.map((r) => r.relativePath);
+  candidates.push(...settled.map((r) => r.candidatePath));
 
   return {
     provider: "nano-banana-2",
     format: record.format,
     candidates,
+    candidateUrls,
     localPath: candidates[0],
     selectedPath: candidates[0],
     refinementRequirement: options.refinementRequirement,

@@ -7,3 +7,4 @@ apps/server/data/
 .runtime/
 *.log
 *.tsbuildinfo
+.vercel

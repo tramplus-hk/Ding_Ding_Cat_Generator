@@ -27,6 +27,8 @@ export const stickerResultSchema = z.object({
   fileUrl: z.string().optional(),
   selectedPath: z.string().optional(),
   candidates: z.array(z.string()).optional(),
+  candidateUrls: z.record(z.string()).optional(),
+  candidatePreviews: z.record(z.string()).optional(),
   refinementRequirement: z.string().optional(),
   notionPageId: z.string().optional(),
 });

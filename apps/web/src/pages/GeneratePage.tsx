@@ -169,6 +169,20 @@ function getGeneratedAssetUrl(filePath: string): string {
   return `${assetBaseUrl}/${normalizedPath}`;
 }
 
+function getCandidatePreviewUrl(record: StickerRecord, candidatePath: string, previews: Record<string, string>): string {
+  if (previews[candidatePath]) {
+    return previews[candidatePath];
+  }
+
+  const candidateIndex = record.result?.candidates?.indexOf(candidatePath) ?? -1;
+  if (candidateIndex >= 0) {
+    const apiBaseUrl = import.meta.env.VITE_API_BASE_URL ?? "";
+    return `${apiBaseUrl}/api/stickers/${record.id}/preview/${candidateIndex}`;
+  }
+
+  return getGeneratedAssetUrl(candidatePath);
+}
+
 export function GeneratePage() {
   const [festival, setFestival] = useState(FESTIVALS[0]);
   const [isFestivalOpen, setIsFestivalOpen] = useState(false);
@@ -187,6 +201,7 @@ export function GeneratePage() {
   const [referenceImagePreview, setReferenceImagePreview] = useState<string | null>(null);
   const [pendingReferenceData, setPendingReferenceData] = useState<{ fileName: string; dataUrl: string } | null>(null);
   const [isDraggingFile, setIsDraggingFile] = useState(false);
+  const [candidatePreviews, setCandidatePreviews] = useState<Record<string, string>>({});
   const dragCounterRef = useRef(0);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -246,6 +261,7 @@ export function GeneratePage() {
     setSelectedPath(null);
     setRefinementRequirement("");
     setRejectReason("");
+    setCandidatePreviews({});
 
     const formData = new FormData(event.currentTarget);
     const theme = festival.id;
@@ -267,9 +283,12 @@ export function GeneratePage() {
       setIsSubmitting(false);
       setGenerationProgress({ current: 0, total: 5 });
 
-      const generatedRecord = await generateSticker(createdRecord.id, (current, total) => {
+      const generatedRecord = await generateSticker(createdRecord.id, (current, total, candidate, preview) => {
         setGenerationProgress({ current, total });
-      }, uploadedPath);
+        if (preview) {
+          setCandidatePreviews((prev) => ({ ...prev, [candidate]: preview }));
+        }
+      }, uploadedPath, { theme: festival.id, description });
 
       setRecord(generatedRecord);
       setSelectedPath(generatedRecord.result?.selectedPath ?? generatedRecord.result?.candidates?.[0] ?? null);
@@ -291,12 +310,16 @@ export function GeneratePage() {
     setMessage(null);
     setActiveAction("regenerate");
     setGenerationProgress({ current: 0, total: 5 });
+    setCandidatePreviews({});
 
     try {
       const uploadedPath = await ensureReferenceUploaded(record.theme, record.description);
-      const generatedRecord = await generateSticker(record.id, (current, total) => {
+      const generatedRecord = await generateSticker(record.id, (current, total, candidate, preview) => {
         setGenerationProgress({ current, total });
-      }, uploadedPath);
+        if (preview) {
+          setCandidatePreviews((prev) => ({ ...prev, [candidate]: preview }));
+        }
+      }, uploadedPath, { theme: record.theme, description: record.description });
       setRecord(generatedRecord);
       setSelectedPath(generatedRecord.result?.selectedPath ?? generatedRecord.result?.candidates?.[0] ?? null);
       setRefinementRequirement("");
@@ -323,6 +346,7 @@ export function GeneratePage() {
     setMessage(null);
     setActiveAction("refine");
     setGenerationProgress({ current: 0, total: 5 });
+    setCandidatePreviews({});
 
     try {
       const uploadedPath = await ensureReferenceUploaded(record.theme, record.description);
@@ -333,8 +357,11 @@ export function GeneratePage() {
           requirement: refinementRequirement.trim(),
           referenceImagePath: uploadedPath,
         },
-        (current, total) => {
+        (current, total, candidate, preview) => {
           setGenerationProgress({ current, total });
+          if (preview) {
+            setCandidatePreviews((prev) => ({ ...prev, [candidate]: preview }));
+          }
         },
       );
       setRecord(refinedRecord);
@@ -363,7 +390,11 @@ export function GeneratePage() {
         await rejectSticker(record.id, { reason: rejectReason.trim() || undefined });
         window.location.reload();
       } else {
-        await acceptSticker(record.id, { selectedPath: selectedCandidate ?? undefined });
+        const selectedPreview = selectedCandidate ? candidatePreviews[selectedCandidate] : undefined;
+        await acceptSticker(record.id, {
+          selectedPath: selectedCandidate ?? undefined,
+          imageData: selectedPreview?.startsWith("data:") ? selectedPreview : undefined,
+        });
         setRecord(null);
         setSelectedPath(null);
         setDescription("");
@@ -608,7 +639,7 @@ export function GeneratePage() {
               <div className="result-display">
                 <div className="candidate-grid">
                   {candidates.map((candidatePath, index) => {
-                    const candidateUrl = getGeneratedAssetUrl(candidatePath);
+                    const candidateUrl = getCandidatePreviewUrl(record, candidatePath, candidatePreviews);
                     const isSelected = candidatePath === selectedCandidate;
 
                     return (
@@ -639,7 +670,7 @@ export function GeneratePage() {
                     Reject reason
                     <textarea placeholder="Optional: what went wrong?" rows={2} value={rejectReason} onChange={(event) => setRejectReason(event.target.value)} />
                   </label>
-                  {selectedCandidate ? <a className="download-button" href={getGeneratedAssetUrl(selectedCandidate)} download>Download selected</a> : null}
+                  {selectedCandidate ? <a className="download-button" href={getCandidatePreviewUrl(record, selectedCandidate, candidatePreviews)} download>Download selected</a> : null}
                 </div>
 
                 <div className="result-actions">

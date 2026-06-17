@@ -3,6 +3,7 @@ import { readFile, stat } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { config } from "../config.js";
+import { readRuntimeBlob } from "./runtimeBlob.js";
 
 const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../../..");
 const notionVersion = "2022-06-28";
@@ -406,8 +407,9 @@ async function uploadFileToNotion(file: DataFolderFile): Promise<string> {
   }, notionFileUploadVersion);
   const formData = new FormData();
   const raw = file.data ?? (await readFile(file.absolutePath));
+  const blobPart = raw.buffer.slice(raw.byteOffset, raw.byteOffset + raw.byteLength) as ArrayBuffer;
 
-  formData.append("file", new Blob([raw], { type: getMimeType(file.absolutePath) }), path.basename(file.absolutePath));
+  formData.append("file", new Blob([blobPart], { type: getMimeType(file.absolutePath) }), path.basename(file.absolutePath));
 
   await notionRequest<NotionFileUploadResponse>(`/file_uploads/${createResponse.id}/send`, {
     method: "POST",
@@ -683,22 +685,34 @@ export async function uploadRejectedStickerRun(record: StickerRecord, reason?: s
 
   const candidateFiles = await Promise.all(
     (record.result?.candidates ?? []).map(async (candidatePath, index) => {
-      const absolutePath = path.join(projectRoot, candidatePath);
-      const data = await readFile(absolutePath);
-      const file: DataFolderFile = {
-        group: "generated",
-        category: record.theme,
-        content: `candidate_${String(index + 1).padStart(2, "0")}${path.extname(candidatePath)}`,
-        relativePath: candidatePath,
-        absolutePath,
-        data,
-        sizeBytes: data.byteLength,
-        updatedAt: new Date().toISOString(),
-      };
-
-      return { file, uploadedFileId: await uploadFileToNotion(file) };
+      const candidateAbsolutePath = candidatePath.startsWith(".runtime/generated/")
+        ? path.join(config.runtimeGeneratedRoot, path.relative(".runtime/generated", candidatePath))
+        : path.join(projectRoot, candidatePath);
+      try {
+        const candidateUrl = record.result?.candidateUrls?.[candidatePath];
+        const data = candidateUrl
+          ? await readRuntimeBlob(candidateUrl)
+          : await readFile(candidateAbsolutePath);
+        if (!data) {
+          return null;
+        }
+        const file: DataFolderFile = {
+          group: "generated",
+          category: record.theme,
+          content: `candidate_${String(index + 1).padStart(2, "0")}${path.extname(candidatePath)}`,
+          relativePath: candidatePath,
+          absolutePath: candidateAbsolutePath,
+          data,
+          sizeBytes: data.byteLength,
+          updatedAt: new Date().toISOString(),
+        };
+        return { file, uploadedFileId: await uploadFileToNotion(file) };
+      } catch {
+        return null;
+      }
     }),
   );
+  const uploadedFiles = candidateFiles.filter((entry): entry is NonNullable<typeof entry> => entry !== null);
   const properties = buildRejectedProperties(record, reason);
   const existingPageId = await findRejectedPage(databaseId, record.id);
 
@@ -709,10 +723,10 @@ export async function uploadRejectedStickerRun(record: StickerRecord, reason?: s
     });
 
     await archivePageChildren(page.id);
-    if (candidateFiles.length > 0) {
+    if (uploadedFiles.length > 0) {
       await notionRequest(`/blocks/${page.id}/children`, {
         method: "PATCH",
-        body: JSON.stringify({ children: candidateFiles.map(({ file, uploadedFileId }) => getImageBlock(file, uploadedFileId)) }),
+        body: JSON.stringify({ children: uploadedFiles.map(({ file, uploadedFileId }) => getImageBlock(file, uploadedFileId)) }),
       });
     }
 
@@ -724,7 +738,7 @@ export async function uploadRejectedStickerRun(record: StickerRecord, reason?: s
     body: JSON.stringify({
       parent: { database_id: databaseId },
       properties,
-      children: candidateFiles.map(({ file, uploadedFileId }) => getImageBlock(file, uploadedFileId)),
+      children: uploadedFiles.map(({ file, uploadedFileId }) => getImageBlock(file, uploadedFileId)),
     }),
   });
 
