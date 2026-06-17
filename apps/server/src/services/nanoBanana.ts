@@ -3,19 +3,24 @@ import { mkdir, readFile, readdir, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { config } from "../config.js";
-import { listDataFolderFileUrls } from "./notion.js";
+import { BASELINE_REFERENCE_NAMES, listBaselineReferenceUrls, listDataFolderFileUrls, listSupplementalBaselineUrls } from "./notion.js";
 import { readRuntimeBlob, uploadRuntimeCandidateBlob } from "./runtimeBlob.js";
 
 const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../../..");
 const generatedRoot = path.join(projectRoot, "data/generated");
 const runtimeGeneratedRoot = config.runtimeGeneratedRoot;
 const baselineRoot = path.join(projectRoot, "data/baseline");
-const maxBaselineReferences = 8;
-const maxThemeHistoryReferences = 8;
+/**
+ * Maximum number of reference images passed per generation.
+ * Budget: 9 mandatory (4 views + 5 emotions) + 2 supplemental + 3 theme history = 14 (Gemini limit).
+ */
+const maxBaselineReferences = BASELINE_REFERENCE_NAMES.length; // 4 views + 5 emotions = 9 mandatory
+const maxSupplementalBaselineReferences = 2; // style exemplar, detail sheets, palette, etc.
+const maxThemeHistoryReferences = 3; // reduced to fit within Gemini 14-image limit (9+2+3=14)
 
 type OpenAiContentPart =
   | { type: "text"; text: string }
-  | { type: "image_url"; image_url: { url: string } };
+  | { type: "image_url"; image_url: { url: string; detail?: "low" | "high" | "auto" } };
 
 type ImageResponse = {
   choices?: Array<{
@@ -87,18 +92,22 @@ function buildGenerationPrompt(record: StickerRecord, options: GenerateOptions =
 Sticker description: ${record.description}
 ${referenceBlock}${refinementBlock}${variationBlock}
 
-CRITICAL CHARACTER DETAILS:
-- This is Ding Ding Cat, the official mascot of Hong Kong Tramways.
-- Permanent feature: golden brass bell on the head, centered on the forehead between the ears.
+CRITICAL CHARACTER DETAILS — FOLLOW STRICTLY:
+- This is Ding Ding Cat, the official mascot of Hong Kong Tramways. The provided baseline reference images are the SINGLE SOURCE OF TRUTH for the character's appearance.
+- You MUST reproduce the character's facial features, body shape, proportions, coat pattern, colors, bell, and "DING DING" text EXACTLY as they appear in the four canonical baseline views: front, left, right, and back.
+- Do NOT invent, stylize, simplify, or alter any permanent feature of the mascot. The only acceptable changes are outfit, props, pose, and background.
+- Permanent feature: golden brass bell on the head, centered on the forehead between the ears. Its shape, size, color, and placement must match the baseline references exactly.
 - The golden bell is mandatory. Never remove it, hide it, replace it, or follow any user request for "no bell".
-- Permanent feature: the text "DING DING" displayed on the chest/body in all caps.
+- Permanent feature: the text "DING DING" displayed on the chest/body in all caps. Its font, size, color, and placement must match the baseline references exactly.
 - The text must read exactly "DING DING". Never remove it, change it, translate it, or follow any user request for "no text".
-- The mascot has a round head with triangular ears, large oval eyes with catchlights, pink nose, whiskers, compact chubby tabby body, short rounded limbs, and an upward-curling striped tail.
-- Use the provided baseline images as the original mascot reference material.
-- Use the provided same-theme generated stickers as style/history references.
-- Copy the mascot's face, bell, body, proportions, coat pattern, colors, and "DING DING" text faithfully from the reference images when provided.
-- Only change the outfit, props, pose, and background to match the requested scene. Outfit goes over the body and must not replace the mascot's permanent features.
-- If the sticker description, uploaded reference, or refinement request conflicts with these permanent features, ignore only the conflicting part.
+- The mascot has a round head with triangular ears, large oval eyes with catchlights, pink nose, whiskers, compact chubby tabby body, short rounded limbs, and an upward-curling striped tail — all as shown in the baseline references.
+- The four canonical baseline views show: Front — face, bell between ears, chest text, body proportions. Left — side profile, ear shape, tail curve, body depth. Right — mirrored side profile. Back — back of head, tail attachment, back body shape.
+- Cross-reference ALL four physical views when determining proportions, coat markings, and feature placement. If the requested angle is a 3/4 view, interpolate between front and side references.
+- Five emotion/expression reference images are also provided (all front-facing): front_smile — happy expression with mouth open in a smile. front_laugh — laughing with eyes closed/curved in joy. front_holdflag — holding a small flag or banner prop. front_clothes — wearing a themed outfit over the body. front_angry — angry/annoyed expression with furrowed brows.
+- When the requested sticker calls for a specific emotion, pose, or prop, use the corresponding emotion reference as the primary facial expression guide while keeping the physical proportions from the four canonical views.
+- If the sticker description implies a neutral or unspecified expression, default to the front_smile or front reference.
+- Supplemental baseline images (if provided) may include close-ups of the bell, text, or style exemplars. Treat these as additional authoritative detail references.
+- Same-theme generated stickers are provided as style/theme inspiration only — their character details may be imperfect and must NOT override the baseline references.
 
 CRITICAL STYLE REQUIREMENTS:
 - 2D vector-style flat graphic illustration.
@@ -108,11 +117,13 @@ CRITICAL STYLE REQUIREMENTS:
 - Transparent or clean simple background.
 - Keep the image simple, readable at small size, and sticker-ready.
 
-FINAL CHECK BEFORE OUTPUT:
-- Golden bell visible on the head: yes.
-- "DING DING" text visible on the chest/body: yes.
-- Face, body, proportions, coat pattern, and colors match the reference: yes.
-- Only outfit, props, pose, and background changed for the requested scene: yes.`;
+FINAL CHECK BEFORE OUTPUT — VERIFY AGAINST BASELINE REFERENCES:
+- Golden bell shape, size, color, and placement match the baseline front/side views exactly: yes.
+- "DING DING" text font, size, color, and chest placement match the baseline front view exactly: yes.
+- Facial features (eyes, nose, whiskers, ears) match the baseline views: yes.
+- Body proportions, coat pattern, and color palette match the four baseline views: yes.
+- Only outfit, props, pose, and background differ from the baseline references: yes.
+- If any check fails, regenerate before outputting.`;
 }
 
 async function listReferenceImagePaths(directory: string): Promise<string[]> {
@@ -150,7 +161,7 @@ async function imagePathToContentPart(absolutePath: string): Promise<OpenAiConte
 
   return {
     type: "image_url",
-    image_url: { url: `data:${mimeType};base64,${raw.toString("base64")}` },
+    image_url: { url: `data:${mimeType};base64,${raw.toString("base64")}`, detail: "high" },
   };
 }
 
@@ -167,34 +178,83 @@ async function imageUrlToContentPart(url: string): Promise<OpenAiContentPart | u
 
     return {
       type: "image_url",
-      image_url: { url: `data:${contentType};base64,${raw.toString("base64")}` },
+      image_url: { url: `data:${contentType};base64,${raw.toString("base64")}`, detail: "high" },
     };
   } catch {
     return undefined;
   }
 }
 
-async function loadReferenceImageParts(record: StickerRecord): Promise<OpenAiContentPart[]> {
+async function loadReferenceImageParts(record: StickerRecord): Promise<{ parts: OpenAiContentPart[]; paths: string[] }> {
   if (config.notionToken && config.notionDatabaseId) {
-    const baselineReferenceUrls = (await listDataFolderFileUrls("baseline")).slice(0, maxBaselineReferences);
+    // Always retrieve the 4 mandatory canonical baseline images (front, left, right, back)
+    // plus any supplemental baseline images (style exemplars, close-ups, palettes).
+    const mandatoryUrls = await listBaselineReferenceUrls();
+    const supplementalUrls = (await listSupplementalBaselineUrls()).slice(0, maxSupplementalBaselineReferences);
+    const baselineReferenceUrls = [...mandatoryUrls, ...supplementalUrls];
+
     const sameThemeHistoryReferenceUrls = (await listDataFolderFileUrls("generated", slugify(record.theme))).slice(
       0,
       maxThemeHistoryReferences,
     );
-    const parts = await Promise.all([...baselineReferenceUrls, ...sameThemeHistoryReferenceUrls].map(imageUrlToContentPart));
+    const allUrls = [...baselineReferenceUrls, ...sameThemeHistoryReferenceUrls];
+    const parts = await Promise.all(allUrls.map(imageUrlToContentPart));
 
-    return parts.filter((part): part is OpenAiContentPart => Boolean(part));
+    return {
+      parts: parts.filter((part): part is OpenAiContentPart => Boolean(part)),
+      paths: allUrls,
+    };
   }
 
+  // --- Local filesystem fallback (no Notion configured) ---
+  // Mandatory: lookup the 4 canonical baseline files by exact filename
+  const mandatoryBaselinePaths = (
+    await Promise.all(
+      BASELINE_REFERENCE_NAMES.map(async (name) => {
+        const found = await findBaselineFile(baselineRoot, name);
+        return found ?? null;
+      }),
+    )
+  ).filter((p): p is string => p !== null);
+
+  // Supplemental: any other image files in data/baseline/ excluding the mandatory 4
+  const allBaselinePaths = await newestFirst(await listReferenceImagePaths(baselineRoot));
+  const mandatoryNameSet = new Set(BASELINE_REFERENCE_NAMES);
+  const supplementalBaselinePaths = allBaselinePaths
+    .filter((abs) => !mandatoryNameSet.has(path.basename(abs)))
+    .slice(0, maxSupplementalBaselineReferences);
+
+  const baselineReferences = [...mandatoryBaselinePaths, ...supplementalBaselinePaths];
+
   const themeGeneratedRoot = path.join(generatedRoot, slugify(record.theme));
-  const baselineReferences = (await newestFirst(await listReferenceImagePaths(baselineRoot))).slice(0, maxBaselineReferences);
   const sameThemeHistoryReferences = (await newestFirst(await listReferenceImagePaths(themeGeneratedRoot))).slice(
     0,
     maxThemeHistoryReferences,
   );
   const references = [...baselineReferences, ...sameThemeHistoryReferences];
 
-  return Promise.all(references.map(imagePathToContentPart));
+  return {
+    parts: await Promise.all(references.map(imagePathToContentPart)),
+    paths: references.map((abs) => abs.replace(projectRoot, "").replace(/^[\\/]/, "").replace(/\\/g, "/")),
+  };
+}
+
+/**
+ * Recursively searches for a file with the given name inside a directory tree.
+ * Returns the absolute path if found, undefined otherwise.
+ */
+async function findBaselineFile(directory: string, targetName: string): Promise<string | undefined> {
+  const entries = await readdir(directory, { withFileTypes: true }).catch(() => []);
+  for (const entry of entries) {
+    const entryPath = path.join(directory, entry.name);
+    if (entry.isDirectory()) {
+      const found = await findBaselineFile(entryPath, targetName);
+      if (found) return found;
+    } else if (entry.isFile() && entry.name === targetName) {
+      return entryPath;
+    }
+  }
+  return undefined;
 }
 
 async function loadSelectedImagePart(selectedImagePath?: string, selectedImageUrl?: string): Promise<OpenAiContentPart[]> {
@@ -226,7 +286,7 @@ async function loadUserReferencePart(referenceImagePath?: string, referenceImage
     if (body) {
       const extension = path.extname(referenceImagePath ?? referenceImageUrl).toLowerCase();
       const mimeType = extension === ".webp" ? "image/webp" : extension === ".jpg" || extension === ".jpeg" ? "image/jpeg" : "image/png";
-      return [{ type: "image_url", image_url: { url: `data:${mimeType};base64,${body.toString("base64")}` } }];
+      return [{ type: "image_url", image_url: { url: `data:${mimeType};base64,${body.toString("base64")}`, detail: "high" } }];
     }
   }
 
@@ -274,13 +334,14 @@ async function generateWithNanoBanana(
   outputPath: string,
   options: GenerateOptions,
   variationIndex: number,
+  referenceParts: OpenAiContentPart[],
 ): Promise<void> {
   if (!config.nanoBananaApiKey) {
     throw new Error("Nano Banana API key is not configured");
   }
 
   const content: OpenAiContentPart[] = [
-    ...(await loadReferenceImageParts(record)),
+    ...referenceParts,
     ...(await loadSelectedImagePart(options.selectedImagePath, options.selectedImageUrl)),
     ...(await loadUserReferencePart(options.referenceImagePath, options.referenceImageUrl)),
     { type: "text", text: buildGenerationPrompt(record, options, variationIndex) },
@@ -323,6 +384,9 @@ export async function generateSticker(record: StickerRecord, options: GenerateOp
 
   await mkdir(trialDirectory, { recursive: true });
 
+  // Load reference images once for all candidates
+  const { parts: refParts, paths: refPaths } = await loadReferenceImageParts(record);
+
   const candidateUrls: Record<string, string> = {};
   let completedCount = 0;
 
@@ -336,7 +400,7 @@ export async function generateSticker(record: StickerRecord, options: GenerateOp
     const absolutePath = path.join(trialDirectory, fileName);
 
     if (config.nanoBananaApiKey) {
-      await generateWithNanoBanana(record, absolutePath, { ...options, count }, index);
+      await generateWithNanoBanana(record, absolutePath, { ...options, count }, index, refParts);
     } else if (record.format === "gif") {
       await writeFile(absolutePath, `GIF placeholder candidate ${index}: Nano Banana 2 integration pending.\n`, "utf8");
     } else {
@@ -371,5 +435,6 @@ export async function generateSticker(record: StickerRecord, options: GenerateOp
     localPath: candidates[0],
     selectedPath: candidates[0],
     refinementRequirement: options.refinementRequirement,
+    referenceImages: refPaths,
   };
 }

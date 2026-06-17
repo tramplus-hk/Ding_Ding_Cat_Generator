@@ -580,6 +580,77 @@ export async function listDataFolderFileUrls(group: DataFolderGroup, category?: 
     .filter((url): url is string => Boolean(url));
 }
 
+/**
+ * Canonical mandatory baseline reference images for consistent Ding Ding Cat
+ * character generation. These MUST always be passed to the image model in this
+ * exact order (Gemini processes images sequentially, so physical views come
+ * before emotion variants).
+ *
+ *   Views 1-4 (physical):  front, left, right, back — the 4 canonical angles.
+ *   Views 5-9 (emotion):   front_smile, front_laugh, front_holdflag,
+ *                          front_clothes, front_angry — expression variants.
+ */
+export const BASELINE_REFERENCE_NAMES = [
+  "front.png", "left.png", "right.png", "back.png",
+  "front_smile.png", "front_laugh.png", "front_holdflag.png", "front_clothes.png", "front_angry.png",
+];
+
+/**
+ * Retrieves the exact set of mandatory canonical baseline reference images from
+ * the Notion baseline database, matched by Name (title property). Returns File
+ * URLs in fixed canonical order: 4 physical views (front/left/right/back)
+ * followed by 5 emotion variants (front_smile/laugh/holdflag/clothes/angry).
+ * Missing images are silently omitted so the system degrades gracefully.
+ */
+export async function listBaselineReferenceUrls(): Promise<string[]> {
+  const pages = await listDataFolderRows("baseline");
+
+  // Index pages by their Name (title) property for O(1) lookup
+  const urlByName = new Map<string, string>();
+  for (const page of pages) {
+    const name = getTitleProperty(page, "Name");
+    const url = getFilePropertyUrl(page, "File");
+    if (name && url) {
+      urlByName.set(name, url);
+    }
+  }
+
+  // Return URLs in canonical order, skipping any that are missing
+  return BASELINE_REFERENCE_NAMES
+    .map((name) => urlByName.get(name))
+    .filter((url): url is string => Boolean(url));
+}
+
+/**
+ * Retrieves supplemental baseline reference images from Notion — any images in the
+ * baseline database whose Name (title) is NOT one of the 9 mandatory canonical
+ * images (4 physical views + 5 emotion variants). These provide additional visual
+ * guidance (style exemplars, close-up detail sheets, color palettes, etc.).
+ * Sorted by the page's "Updated At" date property (newest first).
+ */
+export async function listSupplementalBaselineUrls(): Promise<string[]> {
+  const pages = await listDataFolderRows("baseline");
+  const mandatoryNameSet = new Set(BASELINE_REFERENCE_NAMES);
+
+  // Filter to non-mandatory pages that have a File URL
+  const supplemental = pages
+    .filter((page) => {
+      const name = getTitleProperty(page, "Name");
+      return name && !mandatoryNameSet.has(name);
+    })
+    .map((page) => {
+      const url = getFilePropertyUrl(page, "File");
+      // Parse "Updated At" for sorting (newest first)
+      const updatedAtRaw = (page.properties?.["Updated At"] as { date?: { start?: string } } | undefined)?.date?.start;
+      const updatedAt = updatedAtRaw ? new Date(updatedAtRaw).getTime() : 0;
+      return { url, updatedAt };
+    })
+    .filter((entry): entry is { url: string; updatedAt: number } => Boolean(entry.url))
+    .sort((a, b) => b.updatedAt - a.updatedAt);
+
+  return supplemental.map((entry) => entry.url);
+}
+
 async function getPageCodeContent(pageId: string): Promise<string | undefined> {
   let cursor: string | undefined;
   let content = "";
