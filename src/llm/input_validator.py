@@ -148,6 +148,10 @@ def validate_input(
     if brand_warning:
         warnings.append(brand_warning)
 
+    protected_warning = _check_protected_features(sanitized)
+    if protected_warning:
+        warnings.append(protected_warning)
+
     return ValidationResult(
         is_valid=len(errors) == 0,
         sanitized_input=sanitized,
@@ -258,5 +262,38 @@ def _check_brand_mentions(text: str) -> str | None:
             f"The AI will be instructed to avoid direct IP references, but the "
             f"generated image may still resemble protected characters. "
             f"Please verify before publishing."
+        )
+    return None
+
+
+def _check_protected_features(text: str) -> str | None:
+    lower = text.lower()
+    bell_removal = any(phrase in lower for phrase in [
+        "remove the bell", "no bell", "without bell",
+        "remove bell", "no golden bell", "without the bell",
+        "take off the bell", "take off bell",
+    ])
+    text_removal = any(phrase in lower for phrase in [
+        "remove the text", "no text", "without text",
+        "remove DING DING", "no DING DING", "remove ding ding",
+        "no ding ding", "without ding ding", "remove the DING DING",
+        "change the text", "change DING DING", "change ding ding",
+        "remove the wording", "no wording",
+    ])
+    if bell_removal and text_removal:
+        return (
+            "The golden bell and 'DING DING' text are PERMANENT features of "
+            "Ding Ding Cat. They cannot be removed. Your request will be ignored "
+            "and both the bell and text will appear in the generated sticker."
+        )
+    if bell_removal:
+        return (
+            "The golden bell is a PERMANENT feature of Ding Ding Cat. "
+            "It cannot be removed. Your request will be ignored."
+        )
+    if text_removal:
+        return (
+            "The 'DING DING' text is a PERMANENT feature of Ding Ding Cat. "
+            "It cannot be removed or changed. Your request will be ignored."
         )
     return None

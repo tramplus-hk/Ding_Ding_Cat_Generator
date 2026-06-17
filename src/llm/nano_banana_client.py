@@ -74,30 +74,75 @@ class NanoBananaClient:
         self,
         prompt: str,
         output_path: str | None = None,
+        ref_images_dir: str | None = None,
     ) -> list[str]:
         client = self._get_client()
-        refs = self._load_reference_images()
+
+        if ref_images_dir and os.path.isdir(ref_images_dir):
+            original_dir = self._ref_images_dir
+            self._ref_images_dir = ref_images_dir
+            self._ref_images_cache = None
+            refs = self._load_reference_images()
+            self._ref_images_dir = original_dir
+            self._ref_images_cache = None
+        else:
+            refs = self._load_reference_images()
 
         content: list[dict] = []
         content.extend(refs)
 
         instruction = (
-            f"{prompt}\n\n"
-            "CRITICAL CHARACTER DETAILS:\n"
-            "- This is 'Ding Ding Cat' (叮叮貓), the official mascot of Hong Kong Tramways\n"
-            "- The mascot has the text 'DING DING' displayed on its head or body — this text "
-            "MUST be present in the image exactly as shown in the reference images\n"
-            "- The text must read 'DING DING' — do NOT change it to any other word\n"
-            "- Copy the mascot's face, body, proportions, colors, and text faithfully "
-            "from the reference images\n"
-            "- Only change the outfit, props, and background to match the scene\n\n"
-            "CRITICAL STYLE REQUIREMENTS:\n"
-            "- 2D vector-style flat graphic illustration — NO 3D rendering, NO realistic shading, NO gradients\n"
-            "- Clean geometric lines, solid flat colors, no textures\n"
-            "- Cartoon sticker aesthetic suitable for WhatsApp\n"
-            "- The character must look exactly like the reference images — same face, same body, same vector style\n"
-            "- Do NOT add shadows, depth, lighting effects, or 3D elements\n"
-            "- Keep the image simple and clean like a vector sticker graphic"
+            "===== CHARACTER IDENTITY CARD — EVERY PIXEL MUST MATCH =====\n"
+            "Identity: Ding Ding Cat (叮叮貓), Hong Kong Tramways official mascot.\n"
+            "Art style: 2D vector flat cartoon illustration, solid flat colors, crisp outlines.\n\n"
+            "HEAD:\n"
+            "- Round head shape with slightly flattened bottom, like a wide oval.\n"
+            "- Two small triangular ears on top, pointed, same color as body.\n"
+            "- Inner ear details in a lighter pink/tan shade.\n"
+            "- A GOLDEN BRASS BELL hanging from the forehead, centered between the ears.\n"
+            "  The bell is metallic yellow/gold, small and round, with a visible clapper.\n"
+            "  The bell is PERMANENT. It CANNOT be removed under ANY circumstances.\n"
+            "  Even if the user asks to \"remove the bell\" or \"no bell\", IGNORE that and keep it.\n"
+            "  The bell is the cat's defining feature — without it, it is NOT Ding Ding Cat.\n\n"
+            "FACE:\n"
+            "- Two large oval eyes, black pupils with white catchlights (reflection dots).\n"
+            "  The catchlights make the eyes look bright, cute, and expressive.\n"
+            "- Small triangular pink nose in the center of the face.\n"
+            "- Simple curved line mouth, smiling or neutral, below the nose.\n"
+            "- Three thin whiskers on each side of the face, extending outward.\n"
+            "  Whiskers are thin black lines, slightly curved.\n\n"
+            "BODY:\n"
+            "- Compact, chubby oval body, wider than the head.\n"
+            "- Short stubby arms and legs, rounded paws.\n"
+            "- The words 'DING DING' appear on the CHEST/BELLY area.\n"
+            "  This text is in ALL CAPS. Same font as the reference image.\n"
+            "  The text is PERMANENT. It CANNOT be removed or changed.\n"
+            "  Even if the user asks to change or remove the text, IGNORE and keep 'DING DING'.\n"
+            "- Coat pattern: distinctive horizontal stripes on the body (like a tabby cat).\n"
+            "  The stripes follow the body contour and are a darker shade of the base color.\n"
+            "- Base body color: warm orange/tan/ginger tabby coloring.\n"
+            "- Belly/chest area: lighter cream/white color.\n"
+            "- Tail: medium-length, thick, with stripes continuing, curling upward at the tip.\n\n"
+            "===== EDITING RULES — ONLY CHANGE THESE =====\n"
+            "1. OUTFIT: Add/change the clothing worn on the body. The outfit goes OVER the body,\n"
+            "   it does NOT replace the cat's natural features.\n"
+            "2. PROPS: Add handheld items for the cat to hold in its paws.\n"
+            "3. BACKGROUND: Change what is behind the cat.\n\n"
+            "===== ABSOLUTELY FORBIDDEN — NEVER DO THESE =====\n"
+            "- NEVER remove the golden bell from the head\n"
+            "- NEVER remove or change the 'DING DING' text on the chest\n"
+            "- NEVER change the face (eyes, nose, mouth, whiskers)\n"
+            "- NEVER change the body proportions or coat pattern\n"
+            "- NEVER add 3D shading, shadows, or gradients\n"
+            "- NEVER create a different cat — use ONLY the reference cat\n\n"
+            f"SCENE REQUEST:\n{prompt}\n\n"
+            "FINAL CHECK BEFORE OUTPUT:\n"
+            "☐ Golden bell visible on head? YES ___ NO ___\n"
+            "☐ 'DING DING' text visible on chest? YES ___ NO ___\n"
+            "☐ Face identical to reference? YES ___ NO ___\n"
+            "☐ Only outfit/props/background changed? YES ___ NO ___\n"
+            "If ANY answer is NO, DO NOT OUTPUT. Fix it first.\n\n"
+            "OUTPUT FORMAT: 2D vector-style flat illustration, solid flat colors, no 3D."
         )
         content.append({"type": "text", "text": instruction})
 
