@@ -16,7 +16,7 @@ import {
   listStickerRecords,
   updateStickerRecord,
 } from "../services/stickerStorage.js";
-import { readRuntimeBlob } from "../services/runtimeBlob.js";
+import { readRuntimeBlob, uploadRuntimeReferenceBlob } from "../services/runtimeBlob.js";
 
 type StickerRecord = Awaited<ReturnType<typeof getStickerRecord>> extends infer T ? NonNullable<T> : never;
 
@@ -32,7 +32,9 @@ function sendSSEError(res: Response, message: string): void {
 export const stickersRouter = Router();
 const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../../..");
 const runtimeGeneratedRoot = config.runtimeGeneratedRoot;
-const uploadsDir = path.join(path.dirname(runtimeGeneratedRoot), "uploads");
+const runtimeUploadsRoot = process.env.VERCEL
+  ? path.join("/tmp", "sticker-platform", "runtime", "uploads")
+  : path.join(projectRoot, ".runtime/uploads");
 
 export const uploadReferenceSchema = z.object({
   fileName: z.string().min(1),
@@ -41,10 +43,18 @@ export const uploadReferenceSchema = z.object({
   description: z.string().min(1),
 });
 
+const generateStickerInputSchema = z.object({
+  theme: z.string().min(1).optional(),
+  description: z.string().min(1).optional(),
+  referenceImagePath: z.string().min(1).optional(),
+  referenceImageUrl: z.string().min(1).optional(),
+});
+
 const refineStickerSchema = z.object({
   selectedPath: z.string().min(1),
   requirement: z.string().min(1),
-  referenceImagePath: z.string().optional(),
+  referenceImagePath: z.string().min(1).optional(),
+  referenceImageUrl: z.string().min(1).optional(),
 });
 
 const acceptStickerSchema = z.object({
@@ -114,37 +124,43 @@ async function getAcceptedStickerPaths(record: Awaited<ReturnType<typeof getStic
 
 stickersRouter.post("/upload-reference", async (req, res, next) => {
   try {
-    const { fileName, data, theme, description } = uploadReferenceSchema.parse(req.body);
-    const extension = path.extname(fileName).toLowerCase();
+    const input = uploadReferenceSchema.parse(req.body);
+    const extension = path.extname(input.fileName).toLowerCase();
     const safeExtension = /\.(png|jpe?g|webp|gif)$/i.test(extension) ? extension : ".png";
-    const safeName = `ref-${Date.now()}${safeExtension}`;
+    const safeName = `ref-${Date.now()}-${Math.random().toString(36).slice(2)}${safeExtension}`;
+    const base64 = input.data.includes(",") ? input.data.split(",", 2)[1] : input.data;
+    const body = Buffer.from(base64, "base64");
 
-    await mkdir(uploadsDir, { recursive: true });
+    await mkdir(runtimeUploadsRoot, { recursive: true });
 
-    const base64 = data.includes(",") ? data.split(",")[1] : data;
-    const filePath = path.join(uploadsDir, safeName);
-    await writeFile(filePath, Buffer.from(base64, "base64"));
+    const filePath = path.join(runtimeUploadsRoot, safeName);
+    await writeFile(filePath, body);
 
-    const relativePath = path.relative(projectRoot, filePath).replace(/\\/g, "/");
-    const themeSlug = slugify(theme);
-    const descriptionSlug = slugify(description);
-    const contentName = await getAvailableNotionContentName("reference", themeSlug, descriptionSlug, safeExtension);
+    const relativePath = process.env.VERCEL
+      ? `.runtime/uploads/${safeName}`
+      : path.relative(projectRoot, filePath).replace(/\\/g, "/");
+    const recordKey = `${slugify(input.theme)}-${slugify(input.description)}`;
+    const blobPathname = await uploadRuntimeReferenceBlob(recordKey, relativePath, body);
 
     try {
+      const themeSlug = slugify(input.theme);
+      const descriptionSlug = slugify(input.description);
+      const contentName = await getAvailableNotionContentName("reference", themeSlug, descriptionSlug, safeExtension);
+
       await uploadDataFolderFile({
         group: "reference",
         category: themeSlug,
         content: contentName,
         relativePath,
         absolutePath: filePath,
-        sizeBytes: Buffer.byteLength(base64, "base64"),
+        sizeBytes: body.byteLength,
         updatedAt: new Date().toISOString(),
       });
     } catch {
       // Notion upload is best-effort for reference images
     }
 
-    res.json({ path: relativePath });
+    res.json({ path: relativePath, blobPathname });
   } catch (error) {
     next(error);
   }
@@ -239,17 +255,12 @@ stickersRouter.get("/:id", async (req, res, next) => {
   }
 });
 
-const generateStickerInputSchema = z.object({
-  theme: z.string().min(1).optional(),
-  description: z.string().min(1).optional(),
-});
-
 stickersRouter.post("/:id/generate", async (req, res, next) => {
   try {
+    const input = generateStickerInputSchema.parse(req.body ?? {});
     let record = await getStickerRecord(req.params.id);
 
     if (!record) {
-      const input = generateStickerInputSchema.parse(req.body ?? {});
       if (input.theme && input.description) {
         record = await createStickerRecord({ format: "svg", theme: input.theme, description: input.description });
       } else {
@@ -257,11 +268,6 @@ stickersRouter.post("/:id/generate", async (req, res, next) => {
         return;
       }
     }
-
-    const referenceImagePath: string | undefined =
-      typeof req.body?.referenceImagePath === "string" && req.body.referenceImagePath.length > 0
-        ? req.body.referenceImagePath
-        : undefined;
 
     res.set({
       "Content-Type": "text/event-stream",
@@ -273,7 +279,8 @@ stickersRouter.post("/:id/generate", async (req, res, next) => {
     await updateStickerRecord(record.id, { status: "generating" });
     const result = await generateSticker(record, {
       count: 5,
-      referenceImagePath,
+      referenceImagePath: input.referenceImagePath,
+      referenceImageUrl: input.referenceImageUrl,
       onProgress: (current, total, candidatePath, preview) => {
         writeSSE(res, { type: "progress", current, total, candidate: candidatePath, preview });
       },
@@ -324,6 +331,7 @@ stickersRouter.post("/:id/refine", async (req, res, next) => {
       selectedImageUrl: record.result?.candidateUrls?.[input.selectedPath],
       refinementRequirement: input.requirement,
       referenceImagePath: input.referenceImagePath,
+      referenceImageUrl: input.referenceImageUrl,
       onProgress: (current, total, candidatePath, preview) => {
         writeSSE(res, { type: "progress", current, total, candidate: candidatePath, preview });
       },

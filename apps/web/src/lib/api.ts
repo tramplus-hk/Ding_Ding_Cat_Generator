@@ -23,10 +23,6 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
   return response.json() as Promise<T>;
 }
 
-export function listStickers(): Promise<StickerRecord[]> {
-  return request<StickerRecord[]>("/api/stickers");
-}
-
 export function createSticker(input: CreateStickerInput): Promise<StickerRecord> {
   return request<StickerRecord>("/api/stickers", {
     body: JSON.stringify(input),
@@ -39,8 +35,8 @@ export function uploadReferenceImage(
   data: string,
   theme: string,
   description: string,
-): Promise<{ path: string }> {
-  return request<{ path: string }>("/api/stickers/upload-reference", {
+): Promise<{ path: string; blobPathname?: string }> {
+  return request<{ path: string; blobPathname?: string }>("/api/stickers/upload-reference", {
     body: JSON.stringify({ fileName, data, theme, description }),
     method: "POST",
   });
@@ -105,12 +101,11 @@ async function streamRequest<T>(
 export function generateSticker(
   id: string,
   onProgress: (current: number, total: number, candidate: string, preview?: string) => void,
-  referenceImagePath?: string,
-  fallbackInput?: { theme: string; description: string },
+  input?: { theme?: string; description?: string; referenceImagePath?: string; referenceImageUrl?: string },
 ): Promise<StickerRecord> {
   return streamRequest<StickerRecord>(`/api/stickers/${id}/generate`, {
     method: "POST",
-    body: JSON.stringify(fallbackInput ?? { referenceImagePath }),
+    body: input ? JSON.stringify(input) : undefined,
   }, onProgress).catch(async (error) => {
     const record = await getSticker(id);
 
@@ -124,7 +119,7 @@ export function generateSticker(
 
 export function refineSticker(
   id: string,
-  input: { selectedPath: string; requirement: string; referenceImagePath?: string },
+  input: { selectedPath: string; requirement: string; referenceImagePath?: string; referenceImageUrl?: string },
   onProgress: (current: number, total: number, candidate: string, preview?: string) => void,
 ): Promise<StickerRecord> {
   return streamRequest<StickerRecord>(

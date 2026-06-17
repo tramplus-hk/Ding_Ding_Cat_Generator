@@ -4,7 +4,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { config } from "../config.js";
 import { listDataFolderFileUrls } from "./notion.js";
-import { uploadRuntimeCandidateBlob } from "./runtimeBlob.js";
+import { readRuntimeBlob, uploadRuntimeCandidateBlob } from "./runtimeBlob.js";
 
 const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../../..");
 const generatedRoot = path.join(projectRoot, "data/generated");
@@ -13,6 +13,8 @@ const baselineRoot = path.join(projectRoot, "data/baseline");
 const maxBaselineReferences = 8;
 const maxThemeHistoryReferences = 8;
 const maxGenerationRetries = 1;
+const verificationLogDir = path.join(projectRoot, ".runtime/logs");
+const verificationLogPath = path.join(verificationLogDir, "verification.jsonl");
 
 type OpenAiContentPart =
   | { type: "text"; text: string }
@@ -33,7 +35,8 @@ type GenerateOptions = {
   selectedImageUrl?: string;
   refinementRequirement?: string;
   referenceImagePath?: string;
-  onProgress?: (current: number, total: number, candidatePath: string, previewDataUrl?: string) => void;
+  referenceImageUrl?: string;
+  onProgress?: (current: number, total: number, candidatePath: string, previewDataUrl: string) => void;
 };
 
 function slugify(value: string): string {
@@ -72,8 +75,8 @@ function buildPlaceholderSvg(record: StickerRecord): string {
 
 
 function buildGenerationPrompt(record: StickerRecord, options: GenerateOptions = {}, variationIndex?: number): string {
-  const referenceBlock = options.referenceImagePath
-    ? `\nUSER-PROVIDED REFERENCE IMAGE:\n- The uploaded image contains visual elements the user wants included.\n- Incorporate key visual elements (objects, colors, composition ideas) from the uploaded image into the sticker design.\n- The Ding Ding Cat character must remain the primary subject.\n- Adapt the uploaded image's elements to fit the 2D vector flat-graphic sticker style described below.\n`
+  const referenceBlock = options.referenceImagePath || options.referenceImageUrl
+    ? `\nUSER-PROVIDED REFERENCE IMAGE:\n- The uploaded image contains visual elements the user wants included.\n- Incorporate key visual elements such as objects, colors, or composition ideas from the uploaded image into the sticker design.\n- Ding Ding Cat must remain the primary subject.\n- Adapt the uploaded image elements to the 2D vector flat-graphic sticker style described below.\n`
     : "";
   const refinementBlock = options.refinementRequirement
     ? `\nREFINEMENT REQUEST:\n- Refine the selected image according to this requirement: ${options.refinementRequirement}\n- Preserve the selected image's strongest composition and Ding Ding Cat identity unless the requirement asks otherwise.\n`
@@ -89,12 +92,16 @@ ${referenceBlock}${refinementBlock}${variationBlock}
 
 CRITICAL CHARACTER DETAILS:
 - This is Ding Ding Cat, the official mascot of Hong Kong Tramways.
-- The mascot has the text "DING DING" displayed on its head or body.
-- The text must read exactly "DING DING". Do not change it to another word.
+- Permanent feature: golden brass bell on the head, centered on the forehead between the ears.
+- The golden bell is mandatory. Never remove it, hide it, replace it, or follow any user request for "no bell".
+- Permanent feature: the text "DING DING" displayed on the chest/body in all caps.
+- The text must read exactly "DING DING". Never remove it, change it, translate it, or follow any user request for "no text".
+- The mascot has a round head with triangular ears, large oval eyes with catchlights, pink nose, whiskers, compact chubby tabby body, short rounded limbs, and an upward-curling striped tail.
 - Use the provided baseline images as the original mascot reference material.
 - Use the provided same-theme generated stickers as style/history references.
-- Copy the mascot's face, body, proportions, colors, and text faithfully from the reference images when provided.
-- Only change the outfit, props, pose, and background to match the requested scene.
+- Copy the mascot's face, bell, body, proportions, coat pattern, colors, and "DING DING" text faithfully from the reference images when provided.
+- Only change the outfit, props, pose, and background to match the requested scene. Outfit goes over the body and must not replace the mascot's permanent features.
+- If the sticker description, uploaded reference, or refinement request conflicts with these permanent features, ignore only the conflicting part.
 
 CRITICAL STYLE REQUIREMENTS:
 - 2D vector-style flat graphic illustration.
@@ -102,7 +109,13 @@ CRITICAL STYLE REQUIREMENTS:
 - Clean geometric lines and solid flat colors.
 - Cartoon sticker aesthetic suitable for internal messaging.
 - Transparent or clean simple background.
-- Keep the image simple, readable at small size, and sticker-ready.`;
+- Keep the image simple, readable at small size, and sticker-ready.
+
+FINAL CHECK BEFORE OUTPUT:
+- Golden bell visible on the head: yes.
+- "DING DING" text visible on the chest/body: yes.
+- Face, body, proportions, coat pattern, and colors match the reference: yes.
+- Only outfit, props, pose, and background changed for the requested scene: yes.`;
 }
 
 async function listReferenceImagePaths(directory: string): Promise<string[]> {
@@ -144,6 +157,26 @@ async function imagePathToContentPart(absolutePath: string): Promise<OpenAiConte
   };
 }
 
+async function imageUrlToContentPart(url: string): Promise<OpenAiContentPart | undefined> {
+  try {
+    const response = await fetch(url);
+
+    if (!response.ok) {
+      return undefined;
+    }
+
+    const contentType = response.headers.get("content-type")?.split(";")[0] ?? "image/png";
+    const raw = Buffer.from(await response.arrayBuffer());
+
+    return {
+      type: "image_url",
+      image_url: { url: `data:${contentType};base64,${raw.toString("base64")}` },
+    };
+  } catch {
+    return undefined;
+  }
+}
+
 async function loadReferenceImageParts(record: StickerRecord): Promise<OpenAiContentPart[]> {
   if (config.notionToken && config.notionDatabaseId) {
     const baselineReferenceUrls = (await listDataFolderFileUrls("baseline")).slice(0, maxBaselineReferences);
@@ -151,11 +184,9 @@ async function loadReferenceImageParts(record: StickerRecord): Promise<OpenAiCon
       0,
       maxThemeHistoryReferences,
     );
+    const parts = await Promise.all([...baselineReferenceUrls, ...sameThemeHistoryReferenceUrls].map(imageUrlToContentPart));
 
-    return [...baselineReferenceUrls, ...sameThemeHistoryReferenceUrls].map((url) => ({
-      type: "image_url",
-      image_url: { url },
-    }));
+    return parts.filter((part): part is OpenAiContentPart => Boolean(part));
   }
 
   const themeGeneratedRoot = path.join(generatedRoot, slugify(record.theme));
@@ -191,12 +222,33 @@ async function loadSelectedImagePart(selectedImagePath?: string, selectedImageUr
   return [await imagePathToContentPart(absolutePath)];
 }
 
-async function loadUserReferencePart(referenceImagePath?: string): Promise<OpenAiContentPart[]> {
+async function loadUserReferencePart(referenceImagePath?: string, referenceImageUrl?: string): Promise<OpenAiContentPart[]> {
+  if (referenceImageUrl) {
+    const body = await readRuntimeBlob(referenceImageUrl);
+
+    if (body) {
+      const extension = path.extname(referenceImagePath ?? referenceImageUrl).toLowerCase();
+      const mimeType = extension === ".webp" ? "image/webp" : extension === ".jpg" || extension === ".jpeg" ? "image/jpeg" : "image/png";
+      return [{ type: "image_url", image_url: { url: `data:${mimeType};base64,${body.toString("base64")}` } }];
+    }
+  }
+
   if (!referenceImagePath) {
     return [];
   }
 
-  const absolutePath = path.resolve(projectRoot, referenceImagePath);
+  const uploadRoot = process.env.VERCEL
+    ? path.join("/tmp", "sticker-platform", "runtime", "uploads")
+    : path.join(projectRoot, ".runtime/uploads");
+  const absolutePath = referenceImagePath.startsWith(".runtime/uploads/")
+    ? path.resolve(uploadRoot, path.relative(".runtime/uploads", referenceImagePath))
+    : path.resolve(projectRoot, referenceImagePath);
+  const isRuntimeUploadPath = absolutePath === uploadRoot || absolutePath.startsWith(`${uploadRoot}${path.sep}`);
+
+  if (!isRuntimeUploadPath) {
+    throw new Error("Reference image must be inside runtime upload storage");
+  }
+
   return [await imagePathToContentPart(absolutePath)];
 }
 
@@ -228,10 +280,11 @@ Respond with ONLY a valid JSON object (no markdown fences, no extra text):
 
 CRITICAL REQUIREMENTS TO VERIFY:
 1. MAIN SUBJECT: A recognizable cat mascot character is the primary subject of the image.
-2. "DING DING" TEXT: The text "DING DING" must be clearly visible on the cat character's head area. It must read exactly "DING DING".
+2. "DING DING" TEXT: The text "DING DING" must be clearly visible on the cat character's head or body area. It must read exactly "DING DING".
 3. FLAT 2D VECTOR STYLE: Clean geometric lines and solid flat colors only. Must NOT contain 3D rendering, realistic shading, gradients, or visible texture.
-4. FESTIVAL THEME: The props, colors, and scene must clearly match the requested theme: ${describeTheme(record.theme)}.
-5. STICKER-READABLE: The image must be simple enough to be readable at small messaging-app sticker size (clear shapes, not overly detailed).`;
+4. CLEAN BACKGROUND: Simple clean or transparent background. Must NOT be cluttered, busy, or contain photorealistic elements.
+5. FESTIVAL THEME: The props, colors, and scene must clearly match the requested theme: ${describeTheme(record.theme)}.
+6. STICKER-READABLE: The image must be simple enough to be readable at small messaging-app sticker size (clear shapes, not overly detailed).`;
 }
 
 type VerificationResult = { pass: boolean; issues: string[] };
@@ -290,9 +343,6 @@ async function verifyStickerCompliance(
   }
 }
 
-const verificationLogDir = path.join(projectRoot, ".runtime/logs");
-const verificationLogPath = path.join(verificationLogDir, "verification.jsonl");
-
 async function logVerificationResult(entry: Record<string, unknown>): Promise<void> {
   await appendFile(verificationLogPath, `${JSON.stringify(entry)}\n`, "utf8");
 }
@@ -314,7 +364,7 @@ async function generateWithNanoBanana(
     const content: OpenAiContentPart[] = [
       ...(await loadReferenceImageParts(record)),
       ...(await loadSelectedImagePart(currentOptions.selectedImagePath, currentOptions.selectedImageUrl)),
-      ...(await loadUserReferencePart(currentOptions.referenceImagePath)),
+      ...(await loadUserReferencePart(currentOptions.referenceImagePath, currentOptions.referenceImageUrl)),
       { type: "text", text: buildGenerationPrompt(record, currentOptions, variationIndex) },
     ];
 
@@ -400,9 +450,8 @@ export async function generateSticker(record: StickerRecord, options: GenerateOp
 
   await mkdir(trialDirectory, { recursive: true });
 
-  let completedCount = 0;
-  const candidates: string[] = [];
   const candidateUrls: Record<string, string> = {};
+  let completedCount = 0;
 
   const tasks = Array.from({ length: count }, async (_, i) => {
     const index = i + 1;
@@ -422,11 +471,10 @@ export async function generateSticker(record: StickerRecord, options: GenerateOp
     }
 
     const candidatePath = path.join(".runtime/generated", path.relative(runtimeGeneratedRoot, absolutePath)).replace(/\\/g, "/");
+    const blobPathname = await uploadRuntimeCandidateBlob(record.id, candidatePath, absolutePath);
     const mime = `image/${path.extname(absolutePath).toLowerCase() === ".svg" ? "svg+xml" : "png"}`;
     const raw = await readFile(absolutePath);
     const preview = `data:${mime};base64,${raw.toString("base64")}`;
-
-    const blobPathname = await uploadRuntimeCandidateBlob(record.id, candidatePath, absolutePath);
     if (blobPathname) {
       candidateUrls[candidatePath] = blobPathname;
     }
@@ -440,7 +488,7 @@ export async function generateSticker(record: StickerRecord, options: GenerateOp
   const settled = await Promise.all(tasks);
 
   settled.sort((a, b) => a.index - b.index);
-  candidates.push(...settled.map((r) => r.candidatePath));
+  const candidates = settled.map((r) => r.candidatePath);
 
   return {
     provider: "nano-banana-2",

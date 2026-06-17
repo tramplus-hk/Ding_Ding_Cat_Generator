@@ -3,7 +3,6 @@ import ReactDOM from "react-dom/client";
 import { createBrowserRouter, RouterProvider } from "react-router-dom";
 import { App } from "./App";
 import { GeneratePage } from "./pages/GeneratePage";
-import { HistoryPage } from "./pages/HistoryPage";
 import "./styles.css";
 
 const router = createBrowserRouter([
@@ -12,7 +11,6 @@ const router = createBrowserRouter([
     element: <App />,
     children: [
       { index: true, element: <GeneratePage /> },
-      { path: "history", element: <HistoryPage /> },
     ],
   },
 ]);

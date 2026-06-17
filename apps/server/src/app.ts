@@ -36,7 +36,7 @@ app.use(
     },
   }),
 );
-app.use(express.json({ limit: "2mb" }));
+app.use(express.json({ limit: "8mb" }));
 app.use("/generated", express.static(path.join(projectRoot, "data/generated")));
 app.use("/api/generated", express.static(path.join(projectRoot, "data/generated")));
 app.use("/runtime/generated", express.static(config.runtimeGeneratedRoot));

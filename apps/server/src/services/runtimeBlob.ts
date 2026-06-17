@@ -18,6 +18,10 @@ function assetPrefix(id: string): string {
   return `${runtimeRoot}/generated/${id}/`;
 }
 
+function uploadPrefix(id: string): string {
+  return `${runtimeRoot}/uploads/${id}/`;
+}
+
 function getMimeType(filePath: string): string {
   const extension = path.extname(filePath).toLowerCase();
 
@@ -85,6 +89,21 @@ export async function uploadRuntimeCandidateBlob(recordId: string, logicalPath: 
   const relativePath = logicalPath.replace(/^\.runtime\/generated\//, "");
   const pathname = `${assetPrefix(recordId)}${relativePath}`;
   const body = await readFile(absolutePath);
+  await put(pathname, body, {
+    access: "private",
+    addRandomSuffix: false,
+    allowOverwrite: true,
+    contentType: getMimeType(logicalPath),
+  });
+
+  return pathname;
+}
+
+export async function uploadRuntimeReferenceBlob(recordId: string, logicalPath: string, body: Buffer): Promise<string | undefined> {
+  if (!shouldUseRuntimeBlob()) return undefined;
+
+  const fileName = path.basename(logicalPath);
+  const pathname = `${uploadPrefix(recordId)}${fileName}`;
   await put(pathname, body, {
     access: "private",
     addRandomSuffix: false,
