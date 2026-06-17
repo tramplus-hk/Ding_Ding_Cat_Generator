@@ -254,7 +254,7 @@ Notion is the persistence layer and uses four child databases under the configur
 
 Set `NOTION_TOKEN` and `NOTION_DATABASE_ID` in `.env`. `NOTION_DATABASE_ID` can be either an existing database id or the id of a blank Notion page. The server creates or reuses the required child databases inside that page.
 
-To import the current local `data/` folder into the cloud tables, run the server and call:
+To import the current local `data/` folder into `baseline`, `generated`, and `history`, run the server and call:
 
 ```bash
 curl -X POST http://localhost:4000/api/notion/import
@@ -262,7 +262,7 @@ curl -X POST http://localhost:4000/api/notion/import
 
 Each import table is keyed by `Relative Path`, so rerunning it updates existing Notion rows instead of creating duplicate rows. Image files are uploaded to Notion and attached to the row page, so opening the row shows the actual image. JSON files are written into the row page as a JSON code block.
 
-All four tables have the same layout:
+The `baseline`, `generated`, and `history` tables have:
 
 - `Name`
 - `Category`: the first folder under the group, for example `lunar_new_year`
@@ -273,7 +273,21 @@ All four tables have the same layout:
 - `Size Bytes`
 - `Updated At`
 
-Rejected runs are stored as rows under `rejected`: one row per rejected candidate image plus a `run.json` metadata row with prompt and rejection reason.
+The `rejected` table has:
+
+- `Name`
+- `Record ID`
+- `Theme`
+- `Motion`
+- `Prompt`
+- `Reject Reason`
+- `Selected Candidate`
+- `Candidate Count`
+- `Model`
+- `Created At`
+- `Updated At`
+
+Opening a rejected row shows the rejected candidate images.
 
 ## Cache Cleanup Policy
 

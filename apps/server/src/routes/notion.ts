@@ -7,7 +7,7 @@ import { archiveStaleDataFolderRows, type DataFolderFile, uploadDataFolderFile }
 export const notionRouter = Router();
 const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../../..");
 const dataRoot = path.join(projectRoot, "data");
-const dataGroups = ["baseline", "generated", "history", "rejected"] as const;
+const dataGroups = ["baseline", "generated", "history"] as const;
 
 async function listDataFolderFiles(): Promise<DataFolderFile[]> {
   const files: DataFolderFile[] = [];
