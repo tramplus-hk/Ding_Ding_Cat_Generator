@@ -1,6 +1,7 @@
 import type { CSSProperties, DragEvent, FormEvent } from "react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { StickerRecord } from "@sticker-platform/shared";
+import { Check, ChevronDown, ImageIcon, X } from "lucide-react";
 import { acceptSticker, createSticker, generateSticker, refineSticker, rejectSticker, uploadReferenceImage } from "../lib/api";
 
 const FESTIVALS = [
@@ -484,37 +485,25 @@ export function GeneratePage() {
       {isDraggingFile ? (
         <div className="drop-overlay">
           <div className="drop-box">
-            <div className="drop-icon">Image</div>
+            <div className="drop-icon"><ImageIcon aria-hidden="true" size={24} /></div>
             <p>Drop a reference image here</p>
           </div>
         </div>
       ) : null}
-      <div className="brand-wash" />
       <nav className="topbar" onClick={(event) => event.stopPropagation()}>
-        <img className="brand-logo" src="/tramplus-green.svg" alt="TramPlus" />
+        <img className="brand-logo" src="/TramPlus_4C_BLK-01.png" alt="TramPlus" />
         <div className="topbar-meta">
-          <span>Ding Ding Cat Studio</span>
+          <span>AI Image Generator</span>
           <a href="/history">History</a>
         </div>
       </nav>
 
-      <section className="hero-grid">
-        <div className="hero-panel">
-          <span className="eyebrow">TramPlus Creative Tool</span>
-          <h1>Create clean Ding Ding Cat stickers.</h1>
-          <p>Fast, friendly, and ready for TramPlus.</p>
-          <div className="brand-note">
-            <span>Brand</span>
-            <img className="brand-logo inverse" src="/tramplus-white.svg" alt="TramPlus" />
-            <img className="tagline-image" src="/tagline-black.png" alt="where engineering excellence meets education" />
-          </div>
-        </div>
-
+      <section className="oliver-grid">
         <form className="workbench" onSubmit={handleSubmit} onClick={(event) => event.stopPropagation()}>
           <div className="card-header">
             <div>
-              <span className="eyebrow">Create</span>
-              <h2>Sticker Brief</h2>
+              <span className="eyebrow">Create an image</span>
+              <h2>Generate a Ding Ding Cat sticker</h2>
             </div>
             <div className="status-pill">5 candidates</div>
           </div>
@@ -529,7 +518,7 @@ export function GeneratePage() {
                 style={{ borderColor: isFestivalOpen ? festival.color : undefined, boxShadow: isFestivalOpen ? `0 0 0 4px ${festival.color}22` : undefined }}
               >
                 <span><i style={{ background: festival.color }} />{festival.label}</span>
-                <b className={isFestivalOpen ? "rotated" : ""}>⌄</b>
+                <b className={isFestivalOpen ? "rotated" : ""}><ChevronDown aria-hidden="true" size={18} /></b>
               </button>
               {isFestivalOpen ? (
                 <div className="menu-list festival-menu">
@@ -545,7 +534,7 @@ export function GeneratePage() {
                       style={{ color: item.id === festival.id ? item.color : undefined, background: item.id === festival.id ? item.glow : undefined }}
                     >
                       <span><i style={{ background: item.color }} />{item.label}</span>
-                      {item.id === festival.id ? <span>✓</span> : null}
+                      {item.id === festival.id ? <span className="selected-icon" aria-label="Selected"><Check aria-hidden="true" size={16} /></span> : null}
                     </button>
                   ))}
                 </div>
@@ -565,11 +554,11 @@ export function GeneratePage() {
           </div>
 
           <div className="field-block prompt-block">
-            <label>Describe Your Sticker</label>
+            <label>Prompt</label>
             <div className="prompt-row">
               <input
                 name="description"
-                placeholder={`Example: ${festival.picks[0][1]}`}
+                placeholder="Ding Ding Cat on a Hong Kong tram, clean premium sticker style..."
                 required
                 value={description}
                 onChange={(event) => setDescription(event.target.value)}
@@ -579,7 +568,7 @@ export function GeneratePage() {
                 {isSubmitting ? "Generating" : "Generate five"}
               </button>
             </div>
-            <p className="helper-text">Quick picks fill the prompt. The review panel keeps refinement, rejection, and upload connected.</p>
+            <p className="helper-text">Quick Pick helps students start faster on tablet. Festival adds a Ding Ding Cat theme to the prompt.</p>
           </div>
 
           <div className="field-block reference-block">
@@ -617,19 +606,18 @@ export function GeneratePage() {
           {error ? <p className="form-message error full-width">{error}</p> : null}
           {message ? <p className="form-message success full-width">{message}</p> : null}
         </form>
-      </section>
 
-      <section className="studio-grid" onClick={() => setIsFestivalOpen(false)}>
+        <aside className="studio-grid" onClick={() => setIsFestivalOpen(false)}>
         <div className="preview-card" style={{ borderColor: record || isSubmitting || generationProgress ? festival.color : undefined, boxShadow: record || isSubmitting || generationProgress ? `0 0 0 5px ${festival.color}14, var(--shadow-card)` : undefined }}>
           <div className="preview-topline">
-            <span>Preview Canvas</span>
+            <span>Recent Ding Ding Cat generations</span>
             <strong style={{ color: festival.color }}>{festival.label}</strong>
           </div>
 
           <div className="preview-stage">
             {isSubmitting || generationProgress ? (
               <div className="loading-state">
-                <div className="cat-bounce cat-mark">🐱</div>
+                <div className="cat-bounce cat-mark"><ImageIcon aria-hidden="true" size={30} /></div>
                 {generationProgress && generationProgress.current > 0 ? (
                   <p style={{ color: festival.color }}>Drawing candidate {generationProgress.current} of {generationProgress.total}</p>
                 ) : (
@@ -640,7 +628,7 @@ export function GeneratePage() {
             ) : null}
 
             {!isSubmitting && !generationProgress && !record ? (
-              <div className="empty-state"><div className="cat-mark">🐱</div><p>Your generated sticker candidates will appear here.</p></div>
+              <div className="empty-state"><div className="cat-mark"><ImageIcon aria-hidden="true" size={30} /></div><p>Your generated sticker candidates will appear here.</p></div>
             ) : null}
 
             {!isSubmitting && !generationProgress && record ? (
@@ -690,16 +678,17 @@ export function GeneratePage() {
             ) : null}
           </div>
         </div>
+        </aside>
       </section>
 
       {lightboxImage ? (
         <div className="lightbox-overlay" onClick={() => setLightboxImage(null)}>
-          <button className="lightbox-close" onClick={() => setLightboxImage(null)} aria-label="Close lightbox">✕</button>
+          <button className="lightbox-close" onClick={() => setLightboxImage(null)} aria-label="Close lightbox"><X aria-hidden="true" size={20} /></button>
           <img className="lightbox-image" src={lightboxImage} alt="Enlarged sticker" onClick={(event) => event.stopPropagation()} />
         </div>
       ) : null}
 
-      <footer className="footer-mark"><img className="footer-logo" src="/tramplus-green.svg" alt="TramPlus" /><span>where engineering excellence meets education</span></footer>
+      <footer className="footer-mark">TramPlus Ding Ding Cat AI Image Generator - Built for a crisp, premium brand experience</footer>
     </main>
   );
 }
