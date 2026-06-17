@@ -11,8 +11,8 @@ const dataGroupTitles = {
   baseline: "baseline",
   generated: "generated",
   history: "history",
+  rejected: "rejected",
 } as const;
-const rejectedDatabaseTitle = "rejected";
 const dataFolderDatabaseProperties = {
   Name: { title: {} },
   Category: { rich_text: {} },
@@ -24,21 +24,7 @@ const dataFolderDatabaseProperties = {
   "Size Bytes": { number: {} },
   "Updated At": { date: {} },
 };
-const rejectedDatabaseProperties = {
-  Name: { title: {} },
-  "Record ID": { rich_text: {} },
-  Theme: { rich_text: {} },
-  Motion: { rich_text: {} },
-  Prompt: { rich_text: {} },
-  "Reject Reason": { rich_text: {} },
-  "Selected Candidate": { rich_text: {} },
-  "Candidate Count": { number: {} },
-  Model: { select: {} },
-  "Created At": { date: {} },
-  "Updated At": { date: {} },
-};
-
-export type DataFolderGroup = "baseline" | "generated" | "history";
+export type DataFolderGroup = "baseline" | "generated" | "history" | "rejected";
 
 export type DataFolderFile = {
   group: DataFolderGroup;
@@ -97,7 +83,6 @@ type NotionFileProperty = {
 };
 
 const resolvedDataDatabaseIds = new Map<DataFolderGroup, string>();
-let resolvedRejectedDatabaseId: string | undefined;
 
 function richText(content?: string) {
   const text = content ?? "";
@@ -226,13 +211,12 @@ async function findChildDatabase(parentPageId: string, titleText: string): Promi
 }
 
 async function createDatabase(parentPageId: string, titleText: string): Promise<string> {
-  const properties = titleText === rejectedDatabaseTitle ? rejectedDatabaseProperties : dataFolderDatabaseProperties;
   const database = await notionRequest<NotionDatabaseResponse>("/databases", {
     method: "POST",
     body: JSON.stringify({
       parent: { type: "page_id", page_id: parentPageId },
       title: [{ type: "text", text: { content: titleText } }],
-      properties,
+      properties: dataFolderDatabaseProperties,
     }),
   });
 
@@ -245,13 +229,6 @@ async function ensureDatabaseSchema(databaseId: string): Promise<void> {
   await notionRequest<NotionDatabaseResponse>(`/databases/${databaseId}`, {
     method: "PATCH",
     body: JSON.stringify({ properties: dataFolderDatabaseProperties }),
-  });
-}
-
-async function ensureRejectedDatabaseSchema(databaseId: string): Promise<void> {
-  await notionRequest<NotionDatabaseResponse>(`/databases/${databaseId}`, {
-    method: "PATCH",
-    body: JSON.stringify({ properties: rejectedDatabaseProperties }),
   });
 }
 
@@ -274,26 +251,6 @@ export async function getDataGroupDatabaseId(group: DataFolderGroup): Promise<st
 
   await ensureDatabaseSchema(databaseId);
   resolvedDataDatabaseIds.set(group, databaseId);
-
-  return databaseId;
-}
-
-async function getRejectedDatabaseId(): Promise<string | undefined> {
-  if (resolvedRejectedDatabaseId) {
-    return resolvedRejectedDatabaseId;
-  }
-
-  const parentPageId = await getNotionParentPageId();
-
-  if (!parentPageId) {
-    return undefined;
-  }
-
-  const existingDatabaseId = await findChildDatabase(parentPageId, rejectedDatabaseTitle);
-  const databaseId = existingDatabaseId ?? (await createDatabase(parentPageId, rejectedDatabaseTitle));
-
-  await ensureRejectedDatabaseSchema(databaseId);
-  resolvedRejectedDatabaseId = databaseId;
 
   return databaseId;
 }
@@ -459,18 +416,6 @@ function getPageChildren(file: DataFolderFile, uploadedFileId?: string) {
   }
 
   return [];
-}
-
-function getImageBlock(file: DataFolderFile, uploadedFileId: string) {
-  return {
-    object: "block",
-    type: "image",
-    image: {
-      type: "file_upload",
-      file_upload: { id: uploadedFileId },
-      caption: [{ type: "text", text: { content: file.relativePath } }],
-    },
-  };
 }
 
 async function appendPageContent(pageId: string, file: DataFolderFile, uploadedFileId?: string): Promise<void> {
@@ -642,92 +587,50 @@ export async function getAvailableNotionContentName(
   }
 }
 
-async function findRejectedPage(databaseId: string, recordId: string): Promise<string | undefined> {
-  const response = await notionRequest<NotionQueryResponse>(`/databases/${databaseId}/query`, {
-    method: "POST",
-    body: JSON.stringify({
-      filter: {
-        property: "Record ID",
-        rich_text: { equals: recordId },
-      },
-      page_size: 1,
-    }),
-  });
-
-  return response.results?.[0]?.id;
-}
-
-function buildRejectedProperties(record: StickerRecord, reason?: string) {
-  return {
-    Name: title(`${record.theme}/${record.description}`),
-    "Record ID": richText(record.id),
-    Theme: richText(record.theme),
-    Motion: richText(record.description),
-    Prompt: richText(`${record.theme}: ${record.description}`),
-    "Reject Reason": richText(reason),
-    "Selected Candidate": richText(record.result?.selectedPath),
-    "Candidate Count": number(record.result?.candidates?.length ?? 0),
-    Model: select(record.result?.provider ?? "nano-banana-2"),
-    "Created At": date(record.createdAt),
-    "Updated At": date(record.updatedAt),
-  };
-}
-
 export async function uploadRejectedStickerRun(record: StickerRecord, reason?: string): Promise<string> {
-  const databaseId = await getRejectedDatabaseId();
-
-  if (!databaseId) {
-    return "notion-not-configured";
-  }
-
-  const candidateFiles = await Promise.all(
+  const timestamp = new Date().toISOString();
+  const runName = `${record.id}_${record.theme}_${record.description}`
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "") || record.id;
+  const uploadedPageIds = await Promise.all(
     (record.result?.candidates ?? []).map(async (candidatePath, index) => {
       const absolutePath = path.join(projectRoot, candidatePath);
       const data = await readFile(absolutePath);
-      const file: DataFolderFile = {
-        group: "generated",
+      const extension = path.extname(candidatePath) || ".png";
+
+      return uploadDataFolderFile({
+        group: "rejected",
         category: record.theme,
-        content: `candidate_${String(index + 1).padStart(2, "0")}${path.extname(candidatePath)}`,
-        relativePath: candidatePath,
+        content: `${runName}/candidate_${String(index + 1).padStart(2, "0")}${extension}`,
+        relativePath: `data/rejected/${record.theme}/${runName}/candidate_${String(index + 1).padStart(2, "0")}${extension}`,
         absolutePath,
         data,
         sizeBytes: data.byteLength,
-        updatedAt: new Date().toISOString(),
-      };
-
-      return { file, uploadedFileId: await uploadFileToNotion(file) };
+        updatedAt: timestamp,
+      });
     }),
   );
-  const properties = buildRejectedProperties(record, reason);
-  const existingPageId = await findRejectedPage(databaseId, record.id);
-
-  if (existingPageId) {
-    const page = await notionRequest<NotionPageResult>(`/pages/${existingPageId}`, {
-      method: "PATCH",
-      body: JSON.stringify({ properties }),
-    });
-
-    await archivePageChildren(page.id);
-    if (candidateFiles.length > 0) {
-      await notionRequest(`/blocks/${page.id}/children`, {
-        method: "PATCH",
-        body: JSON.stringify({ children: candidateFiles.map(({ file, uploadedFileId }) => getImageBlock(file, uploadedFileId)) }),
-      });
-    }
-
-    return page.id;
-  }
-
-  const page = await notionRequest<NotionPageResult>("/pages", {
-    method: "POST",
-    body: JSON.stringify({
-      parent: { database_id: databaseId },
-      properties,
-      children: candidateFiles.map(({ file, uploadedFileId }) => getImageBlock(file, uploadedFileId)),
-    }),
+  const metadata = {
+    ...record,
+    rejectReason: reason ?? "",
+    rejectedAt: timestamp,
+  };
+  const jsonContent = `${JSON.stringify(metadata, null, 2)}\n`;
+  const metadataPageId = await uploadDataFolderFile({
+    group: "rejected",
+    category: record.theme,
+    content: `${runName}/run.json`,
+    relativePath: `data/rejected/${record.theme}/${runName}/run.json`,
+    absolutePath: `data/rejected/${record.theme}/${runName}/run.json`,
+    data: Buffer.from(jsonContent, "utf8"),
+    textContent: jsonContent,
+    sizeBytes: Buffer.byteLength(jsonContent),
+    updatedAt: timestamp,
   });
 
-  return page.id;
+  return uploadedPageIds[0] ?? metadataPageId;
 }
 
 function dataFileFromRelativePath(relativePath: string): DataFolderFile | undefined {
