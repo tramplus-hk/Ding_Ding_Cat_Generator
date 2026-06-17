@@ -1,5 +1,5 @@
 import type { CSSProperties, FormEvent } from "react";
-import { useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import type { StickerRecord } from "@sticker-platform/shared";
 import { acceptSticker, createSticker, generateSticker, refineSticker, rejectSticker } from "../lib/api";
 
@@ -97,16 +97,17 @@ function getRequiredValue(formData: FormData, fieldName: string): string {
 
 function getGeneratedAssetUrl(filePath: string): string {
   const assetBaseUrl = import.meta.env.VITE_API_BASE_URL ?? "";
+  const normalizedPath = filePath.replace(/\\/g, "/");
 
-  if (filePath.startsWith("data/generated/")) {
-    return `${assetBaseUrl}/${filePath.replace(/^data\//, "")}`;
+  if (normalizedPath.startsWith("data/generated/")) {
+    return `${assetBaseUrl}/${normalizedPath.replace(/^data\//, "")}`;
   }
 
-  if (filePath.startsWith(".runtime/generated/")) {
-    return `${assetBaseUrl}/${filePath.replace(/^\.runtime\//, "runtime/")}`;
+  if (normalizedPath.startsWith(".runtime/generated/")) {
+    return `${assetBaseUrl}/${normalizedPath.replace(/^\.runtime\//, "runtime/")}`;
   }
 
-  return `${assetBaseUrl}/${filePath}`;
+  return `${assetBaseUrl}/${normalizedPath}`;
 }
 
 export function GeneratePage() {
@@ -121,6 +122,8 @@ export function GeneratePage() {
   const [message, setMessage] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [activeAction, setActiveAction] = useState<"accept" | "reject" | "regenerate" | "refine" | null>(null);
+  const [generationProgress, setGenerationProgress] = useState<{ current: number; total: number } | null>(null);
+  const [lightboxImage, setLightboxImage] = useState<string | null>(null);
 
   const candidates = record?.result?.candidates ?? [];
   const selectedCandidate = selectedPath ?? record?.result?.selectedPath ?? record?.result?.localPath ?? candidates[0] ?? null;
@@ -156,7 +159,12 @@ export function GeneratePage() {
         theme,
         description,
       });
-      const generatedRecord = await generateSticker(createdRecord.id);
+      setIsSubmitting(false);
+      setGenerationProgress({ current: 0, total: 5 });
+
+      const generatedRecord = await generateSticker(createdRecord.id, (current, total) => {
+        setGenerationProgress({ current, total });
+      });
 
       setRecord(generatedRecord);
       setSelectedPath(generatedRecord.result?.selectedPath ?? generatedRecord.result?.candidates?.[0] ?? null);
@@ -165,6 +173,7 @@ export function GeneratePage() {
       setError(caughtError instanceof Error ? caughtError.message : "Failed to create sticker request");
     } finally {
       setIsSubmitting(false);
+      setGenerationProgress(null);
     }
   }
 
@@ -176,9 +185,12 @@ export function GeneratePage() {
     setError(null);
     setMessage(null);
     setActiveAction("regenerate");
+    setGenerationProgress({ current: 0, total: 5 });
 
     try {
-      const generatedRecord = await generateSticker(record.id);
+      const generatedRecord = await generateSticker(record.id, (current, total) => {
+        setGenerationProgress({ current, total });
+      });
       setRecord(generatedRecord);
       setSelectedPath(generatedRecord.result?.selectedPath ?? generatedRecord.result?.candidates?.[0] ?? null);
       setRefinementRequirement("");
@@ -187,6 +199,7 @@ export function GeneratePage() {
       setError(caughtError instanceof Error ? caughtError.message : "Failed to regenerate candidates");
     } finally {
       setActiveAction(null);
+      setGenerationProgress(null);
     }
   }
 
@@ -203,12 +216,19 @@ export function GeneratePage() {
     setError(null);
     setMessage(null);
     setActiveAction("refine");
+    setGenerationProgress({ current: 0, total: 5 });
 
     try {
-      const refinedRecord = await refineSticker(record.id, {
-        selectedPath: selectedCandidate,
-        requirement: refinementRequirement.trim(),
-      });
+      const refinedRecord = await refineSticker(
+        record.id,
+        {
+          selectedPath: selectedCandidate,
+          requirement: refinementRequirement.trim(),
+        },
+        (current, total) => {
+          setGenerationProgress({ current, total });
+        },
+      );
       setRecord(refinedRecord);
       setSelectedPath(refinedRecord.result?.selectedPath ?? refinedRecord.result?.candidates?.[0] ?? null);
       setRefinementRequirement("");
@@ -217,6 +237,7 @@ export function GeneratePage() {
       setError(caughtError instanceof Error ? caughtError.message : "Failed to refine selected candidate");
     } finally {
       setActiveAction(null);
+      setGenerationProgress(null);
     }
   }
 
@@ -248,6 +269,20 @@ export function GeneratePage() {
       setActiveAction(null);
     }
   }
+
+  const handleEscape = useCallback(
+    (e: KeyboardEvent) => {
+      if (e.key === "Escape" && lightboxImage) {
+        setLightboxImage(null);
+      }
+    },
+    [lightboxImage],
+  );
+
+  useEffect(() => {
+    window.addEventListener("keydown", handleEscape);
+    return () => window.removeEventListener("keydown", handleEscape);
+  }, [handleEscape]);
 
   return (
     <section className="generator-card" style={{ "--festival-color": festival.color, "--festival-glow": festival.glow } as CSSProperties}>
@@ -320,21 +355,35 @@ export function GeneratePage() {
       </form>
 
       <div className="sticker-canvas" onClick={() => setIsFestivalOpen(false)}>
-        {isSubmitting ? (
+        {isSubmitting || generationProgress ? (
           <div className="canvas-state">
             <div className="cat-bounce">🐱</div>
-            <p>Ding Ding is generating...</p>
+            {generationProgress && generationProgress.current > 0 ? (
+              <>
+                <p>
+                  Generating candidate {generationProgress.current} of {generationProgress.total}...
+                </p>
+                <div className="progress-bar">
+                  <div
+                    className="progress-fill"
+                    style={{ width: `${(generationProgress.current / generationProgress.total) * 100}%` }}
+                  />
+                </div>
+              </>
+            ) : (
+              <p>Ding Ding is generating...</p>
+            )}
           </div>
         ) : null}
 
-        {!isSubmitting && !record ? (
+        {!isSubmitting && !generationProgress && !record ? (
           <div className="canvas-state muted">
             <div>🐾</div>
             <p>Your sticker will appear here</p>
           </div>
         ) : null}
 
-        {!isSubmitting && record ? (
+        {!isSubmitting && !generationProgress && record ? (
           <div className="result-display">
             <div className="candidate-grid">
               {candidates.map((candidatePath, index) => {
@@ -350,7 +399,11 @@ export function GeneratePage() {
                   >
                     <span>Candidate {index + 1}</span>
                     {candidatePath.endsWith(".svg") || candidatePath.endsWith(".png") || candidatePath.endsWith(".jpg") || candidatePath.endsWith(".webp") ? (
-                      <img src={candidateUrl} alt={`Candidate ${index + 1}: ${record.description}`} />
+                      <img
+                        src={candidateUrl}
+                        alt={`Candidate ${index + 1}: ${record.description}`}
+                        onDoubleClick={() => setLightboxImage(candidateUrl)}
+                      />
                     ) : (
                       <strong>{candidatePath}</strong>
                     )}
@@ -410,6 +463,20 @@ export function GeneratePage() {
           </div>
         ) : null}
       </div>
+
+      {lightboxImage ? (
+        <div className="lightbox-overlay" onClick={() => setLightboxImage(null)}>
+          <button className="lightbox-close" onClick={() => setLightboxImage(null)} aria-label="Close lightbox">
+            ✕
+          </button>
+          <img
+            className="lightbox-image"
+            src={lightboxImage}
+            alt="Enlarged sticker"
+            onClick={(e) => e.stopPropagation()}
+          />
+        </div>
+      ) : null}
 
       <p className="credit-line">Made with love by Tramplus · Powered by Gemini Nano Banana 2</p>
     </section>

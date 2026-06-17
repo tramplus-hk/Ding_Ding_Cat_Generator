@@ -1,3 +1,4 @@
+import type { Response } from "express";
 import { createStickerSchema } from "@sticker-platform/shared";
 import { Router } from "express";
 import path from "node:path";
@@ -12,6 +13,15 @@ import {
   listStickerRecords,
   updateStickerRecord,
 } from "../services/stickerStorage.js";
+
+function writeSSE(res: Response, event: Record<string, unknown>): void {
+  res.write(`data: ${JSON.stringify(event)}\n\n`);
+}
+
+function sendSSEError(res: Response, message: string): void {
+  writeSSE(res, { type: "error", message });
+  res.end();
+}
 
 export const stickersRouter = Router();
 const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../../..");
@@ -116,16 +126,33 @@ stickersRouter.post("/:id/generate", async (req, res, next) => {
       return;
     }
 
+    res.set({
+      "Content-Type": "text/event-stream",
+      "Cache-Control": "no-cache",
+      Connection: "keep-alive",
+    });
+
     await updateStickerRecord(record.id, { status: "generating" });
-    const result = await generateSticker(record, { count: 5 });
+    const result = await generateSticker(record, {
+      count: 5,
+      onProgress: (current, total, candidatePath) => {
+        writeSSE(res, { type: "progress", current, total, candidate: candidatePath });
+      },
+    });
     const updated = await updateStickerRecord(record.id, {
       status: "generated",
       result,
     });
 
-    res.json(updated);
+    writeSSE(res, { type: "done", record: updated });
+    res.end();
   } catch (error) {
-    next(error);
+    if (res.headersSent) {
+      const message = error instanceof Error ? error.message : "Generation failed";
+      sendSSEError(res, message);
+    } else {
+      next(error);
+    }
   }
 });
 
@@ -140,6 +167,13 @@ stickersRouter.post("/:id/refine", async (req, res, next) => {
     }
 
     assertGeneratedPath(input.selectedPath);
+
+    res.set({
+      "Content-Type": "text/event-stream",
+      "Cache-Control": "no-cache",
+      Connection: "keep-alive",
+    });
+
     await updateStickerRecord(record.id, {
       status: "generating",
       result: record.result ? { ...record.result, selectedPath: input.selectedPath } : undefined,
@@ -148,15 +182,24 @@ stickersRouter.post("/:id/refine", async (req, res, next) => {
       count: 5,
       selectedImagePath: input.selectedPath,
       refinementRequirement: input.requirement,
+      onProgress: (current, total, candidatePath) => {
+        writeSSE(res, { type: "progress", current, total, candidate: candidatePath });
+      },
     });
     const updated = await updateStickerRecord(record.id, {
       status: "generated",
       result,
     });
 
-    res.json(updated);
+    writeSSE(res, { type: "done", record: updated });
+    res.end();
   } catch (error) {
-    next(error);
+    if (res.headersSent) {
+      const message = error instanceof Error ? error.message : "Refinement failed";
+      sendSSEError(res, message);
+    } else {
+      next(error);
+    }
   }
 });
 

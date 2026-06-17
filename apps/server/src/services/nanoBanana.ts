@@ -29,6 +29,7 @@ type GenerateOptions = {
   count?: number;
   selectedImagePath?: string;
   refinementRequirement?: string;
+  onProgress?: (current: number, total: number, candidatePath: string) => void;
 };
 
 function slugify(value: string): string {
@@ -267,7 +268,8 @@ export async function generateSticker(record: StickerRecord, options: GenerateOp
       await writeFile(absolutePath, buildPlaceholderSvg(record), "utf8");
     }
 
-    candidates.push(path.relative(projectRoot, absolutePath));
+    candidates.push(path.relative(projectRoot, absolutePath).replace(/\\/g, "/"));
+    options.onProgress?.(index, count, candidates[candidates.length - 1]);
   }
 
   return {
