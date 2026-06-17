@@ -1,11 +1,12 @@
 import type { Response } from "express";
 import { createStickerSchema } from "@sticker-platform/shared";
 import { Router } from "express";
+import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { z } from "zod";
 import { generateSticker } from "../services/nanoBanana.js";
-import { getAvailableNotionContentName, uploadAcceptedStickerRecord, uploadRejectedStickerRun } from "../services/notion.js";
+import { getAvailableNotionContentName, uploadAcceptedStickerRecord, uploadDataFolderFile, uploadRejectedStickerRun } from "../services/notion.js";
 import {
   createStickerRecord,
   deleteStickerCache,
@@ -26,10 +27,19 @@ function sendSSEError(res: Response, message: string): void {
 export const stickersRouter = Router();
 const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../../..");
 const runtimeGeneratedRoot = path.join(projectRoot, ".runtime/generated");
+const uploadsDir = path.join(projectRoot, ".runtime/uploads");
+
+export const uploadReferenceSchema = z.object({
+  fileName: z.string().min(1),
+  data: z.string().min(1),
+  theme: z.string().min(1),
+  description: z.string().min(1),
+});
 
 const refineStickerSchema = z.object({
   selectedPath: z.string().min(1),
   requirement: z.string().min(1),
+  referenceImagePath: z.string().optional(),
 });
 
 const acceptStickerSchema = z.object({
@@ -84,6 +94,44 @@ async function getAcceptedStickerPaths(record: Awaited<ReturnType<typeof getStic
   };
 }
 
+stickersRouter.post("/upload-reference", async (req, res, next) => {
+  try {
+    const { fileName, data, theme, description } = uploadReferenceSchema.parse(req.body);
+    const extension = path.extname(fileName).toLowerCase();
+    const safeExtension = /\.(png|jpe?g|webp|gif)$/i.test(extension) ? extension : ".png";
+    const safeName = `ref-${Date.now()}${safeExtension}`;
+
+    await mkdir(uploadsDir, { recursive: true });
+
+    const base64 = data.includes(",") ? data.split(",")[1] : data;
+    const filePath = path.join(uploadsDir, safeName);
+    await writeFile(filePath, Buffer.from(base64, "base64"));
+
+    const relativePath = path.relative(projectRoot, filePath).replace(/\\/g, "/");
+    const themeSlug = slugify(theme);
+    const descriptionSlug = slugify(description);
+    const contentName = await getAvailableNotionContentName("reference", themeSlug, descriptionSlug, safeExtension);
+
+    try {
+      await uploadDataFolderFile({
+        group: "reference",
+        category: themeSlug,
+        content: contentName,
+        relativePath,
+        absolutePath: filePath,
+        sizeBytes: Buffer.byteLength(base64, "base64"),
+        updatedAt: new Date().toISOString(),
+      });
+    } catch {
+      // Notion upload is best-effort for reference images
+    }
+
+    res.json({ path: relativePath });
+  } catch (error) {
+    next(error);
+  }
+});
+
 stickersRouter.get("/", async (_req, res, next) => {
   try {
     res.json(await listStickerRecords());
@@ -126,6 +174,11 @@ stickersRouter.post("/:id/generate", async (req, res, next) => {
       return;
     }
 
+    const referenceImagePath: string | undefined =
+      typeof req.body?.referenceImagePath === "string" && req.body.referenceImagePath.length > 0
+        ? req.body.referenceImagePath
+        : undefined;
+
     res.set({
       "Content-Type": "text/event-stream",
       "Cache-Control": "no-cache",
@@ -135,6 +188,7 @@ stickersRouter.post("/:id/generate", async (req, res, next) => {
     await updateStickerRecord(record.id, { status: "generating" });
     const result = await generateSticker(record, {
       count: 5,
+      referenceImagePath,
       onProgress: (current, total, candidatePath) => {
         writeSSE(res, { type: "progress", current, total, candidate: candidatePath });
       },
@@ -182,6 +236,7 @@ stickersRouter.post("/:id/refine", async (req, res, next) => {
       count: 5,
       selectedImagePath: input.selectedPath,
       refinementRequirement: input.requirement,
+      referenceImagePath: input.referenceImagePath,
       onProgress: (current, total, candidatePath) => {
         writeSSE(res, { type: "progress", current, total, candidate: candidatePath });
       },

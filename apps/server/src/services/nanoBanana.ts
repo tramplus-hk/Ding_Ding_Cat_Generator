@@ -29,6 +29,7 @@ type GenerateOptions = {
   count?: number;
   selectedImagePath?: string;
   refinementRequirement?: string;
+  referenceImagePath?: string;
   onProgress?: (current: number, total: number, candidatePath: string) => void;
 };
 
@@ -67,6 +68,9 @@ function buildPlaceholderSvg(record: StickerRecord): string {
 }
 
 function buildGenerationPrompt(record: StickerRecord, options: GenerateOptions = {}, variationIndex?: number): string {
+  const referenceBlock = options.referenceImagePath
+    ? `\nUSER-PROVIDED REFERENCE IMAGE:\n- The uploaded image contains visual elements the user wants included.\n- Incorporate key visual elements (objects, colors, composition ideas) from the uploaded image into the sticker design.\n- The Ding Ding Cat character must remain the primary subject.\n- Adapt the uploaded image's elements to fit the 2D vector flat-graphic sticker style described below.\n`
+    : "";
   const refinementBlock = options.refinementRequirement
     ? `\nREFINEMENT REQUEST:\n- Refine the selected image according to this requirement: ${options.refinementRequirement}\n- Preserve the selected image's strongest composition and Ding Ding Cat identity unless the requirement asks otherwise.\n`
     : "";
@@ -77,7 +81,7 @@ function buildGenerationPrompt(record: StickerRecord, options: GenerateOptions =
   return `${describeTheme(record.theme)}
 
 Sticker description: ${record.description}
-${refinementBlock}${variationBlock}
+${referenceBlock}${refinementBlock}${variationBlock}
 
 CRITICAL CHARACTER DETAILS:
 - This is Ding Ding Cat, the official mascot of Hong Kong Tramways.
@@ -177,6 +181,15 @@ async function loadSelectedImagePart(selectedImagePath?: string): Promise<OpenAi
   return [await imagePathToContentPart(absolutePath)];
 }
 
+async function loadUserReferencePart(referenceImagePath?: string): Promise<OpenAiContentPart[]> {
+  if (!referenceImagePath) {
+    return [];
+  }
+
+  const absolutePath = path.resolve(projectRoot, referenceImagePath);
+  return [await imagePathToContentPart(absolutePath)];
+}
+
 function extractImageDataUrl(response: ImageResponse): string | undefined {
   const message = response.choices?.[0]?.message;
   const imageFromImages = message?.images?.find((image) => image.image_url?.url)?.image_url?.url;
@@ -210,6 +223,7 @@ async function generateWithNanoBanana(
   const content: OpenAiContentPart[] = [
     ...(await loadReferenceImageParts(record)),
     ...(await loadSelectedImagePart(options.selectedImagePath)),
+    ...(await loadUserReferencePart(options.referenceImagePath)),
     { type: "text", text: buildGenerationPrompt(record, options, variationIndex) },
   ];
 

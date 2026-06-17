@@ -11,6 +11,7 @@ const dataGroupTitles = {
   baseline: "baseline",
   generated: "generated",
   history: "history",
+  reference: "reference",
 } as const;
 const rejectedDatabaseTitle = "rejected";
 const dataFolderDatabaseProperties = {
@@ -38,7 +39,7 @@ const rejectedDatabaseProperties = {
   "Updated At": { date: {} },
 };
 
-export type DataFolderGroup = "baseline" | "generated" | "history";
+export type DataFolderGroup = "baseline" | "generated" | "history" | "reference";
 
 export type DataFolderFile = {
   group: DataFolderGroup;
@@ -733,7 +734,7 @@ export async function uploadRejectedStickerRun(record: StickerRecord, reason?: s
 function dataFileFromRelativePath(relativePath: string): DataFolderFile | undefined {
   const [dataRoot, group, category, ...rest] = relativePath.split(path.sep);
 
-  if (dataRoot !== "data" || !category || !["baseline", "generated", "history"].includes(group)) {
+  if (dataRoot !== "data" || !category || !["baseline", "generated", "history", "reference"].includes(group)) {
     return undefined;
   }
 

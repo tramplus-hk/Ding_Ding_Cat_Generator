@@ -34,6 +34,18 @@ export function createSticker(input: CreateStickerInput): Promise<StickerRecord>
   });
 }
 
+export function uploadReferenceImage(
+  fileName: string,
+  data: string,
+  theme: string,
+  description: string,
+): Promise<{ path: string }> {
+  return request<{ path: string }>("/api/stickers/upload-reference", {
+    body: JSON.stringify({ fileName, data, theme, description }),
+    method: "POST",
+  });
+}
+
 export function getSticker(id: string): Promise<StickerRecord> {
   return request<StickerRecord>(`/api/stickers/${id}`);
 }
@@ -93,13 +105,21 @@ async function streamRequest<T>(
 export function generateSticker(
   id: string,
   onProgress: (current: number, total: number) => void,
+  referenceImagePath?: string,
 ): Promise<StickerRecord> {
-  return streamRequest<StickerRecord>(`/api/stickers/${id}/generate`, { method: "POST" }, onProgress);
+  return streamRequest<StickerRecord>(
+    `/api/stickers/${id}/generate`,
+    {
+      method: "POST",
+      body: JSON.stringify({ referenceImagePath }),
+    },
+    onProgress,
+  );
 }
 
 export function refineSticker(
   id: string,
-  input: { selectedPath: string; requirement: string },
+  input: { selectedPath: string; requirement: string; referenceImagePath?: string },
   onProgress: (current: number, total: number) => void,
 ): Promise<StickerRecord> {
   return streamRequest<StickerRecord>(

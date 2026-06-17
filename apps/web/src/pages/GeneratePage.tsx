@@ -1,7 +1,7 @@
 import type { CSSProperties, FormEvent } from "react";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { StickerRecord } from "@sticker-platform/shared";
-import { acceptSticker, createSticker, generateSticker, refineSticker, rejectSticker } from "../lib/api";
+import { acceptSticker, createSticker, generateSticker, refineSticker, rejectSticker, uploadReferenceImage } from "../lib/api";
 
 const FESTIVALS = [
   {
@@ -124,6 +124,12 @@ export function GeneratePage() {
   const [activeAction, setActiveAction] = useState<"accept" | "reject" | "regenerate" | "refine" | null>(null);
   const [generationProgress, setGenerationProgress] = useState<{ current: number; total: number } | null>(null);
   const [lightboxImage, setLightboxImage] = useState<string | null>(null);
+  const [referenceImagePath, setReferenceImagePath] = useState<string | null>(null);
+  const [referenceImagePreview, setReferenceImagePreview] = useState<string | null>(null);
+  const [pendingReferenceData, setPendingReferenceData] = useState<{ fileName: string; dataUrl: string } | null>(null);
+  const [isDraggingFile, setIsDraggingFile] = useState(false);
+  const dragCounterRef = useRef(0);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   const candidates = record?.result?.candidates ?? [];
   const selectedCandidate = selectedPath ?? record?.result?.selectedPath ?? record?.result?.localPath ?? candidates[0] ?? null;
@@ -131,6 +137,45 @@ export function GeneratePage() {
   function applyPick(prompt: string) {
     setDescription(prompt);
     setIsFestivalOpen(false);
+  }
+
+  async function storeReferenceFile(file: File) {
+    setError(null);
+
+    try {
+      const reader = new FileReader();
+      const dataUrl = await new Promise<string>((resolve, reject) => {
+        reader.addEventListener("load", () => resolve(reader.result as string));
+        reader.addEventListener("error", () => reject(new Error("Failed to read file")));
+        reader.readAsDataURL(file);
+      });
+
+      setPendingReferenceData({ fileName: file.name, dataUrl });
+      setReferenceImagePreview(dataUrl);
+      setReferenceImagePath(null);
+    } catch (caughtError) {
+      setError(caughtError instanceof Error ? caughtError.message : "Failed to read reference image");
+    }
+  }
+
+  function removeReferenceImage() {
+    setReferenceImagePath(null);
+    setReferenceImagePreview(null);
+    setPendingReferenceData(null);
+    if (fileInputRef.current) {
+      fileInputRef.current.value = "";
+    }
+  }
+
+  async function ensureReferenceUploaded(theme: string, description: string): Promise<string | undefined> {
+    if (pendingReferenceData) {
+      const { fileName, dataUrl } = pendingReferenceData;
+      const { path } = await uploadReferenceImage(fileName, dataUrl, theme, description);
+      setReferenceImagePath(path);
+      setPendingReferenceData(null);
+      return path;
+    }
+    return referenceImagePath ?? undefined;
   }
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
@@ -159,12 +204,13 @@ export function GeneratePage() {
         theme,
         description,
       });
+      const uploadedPath = await ensureReferenceUploaded(theme, description);
       setIsSubmitting(false);
       setGenerationProgress({ current: 0, total: 5 });
 
       const generatedRecord = await generateSticker(createdRecord.id, (current, total) => {
         setGenerationProgress({ current, total });
-      });
+      }, uploadedPath);
 
       setRecord(generatedRecord);
       setSelectedPath(generatedRecord.result?.selectedPath ?? generatedRecord.result?.candidates?.[0] ?? null);
@@ -188,9 +234,10 @@ export function GeneratePage() {
     setGenerationProgress({ current: 0, total: 5 });
 
     try {
+      const uploadedPath = await ensureReferenceUploaded(record.theme, record.description);
       const generatedRecord = await generateSticker(record.id, (current, total) => {
         setGenerationProgress({ current, total });
-      });
+      }, uploadedPath);
       setRecord(generatedRecord);
       setSelectedPath(generatedRecord.result?.selectedPath ?? generatedRecord.result?.candidates?.[0] ?? null);
       setRefinementRequirement("");
@@ -219,11 +266,13 @@ export function GeneratePage() {
     setGenerationProgress({ current: 0, total: 5 });
 
     try {
+      const uploadedPath = await ensureReferenceUploaded(record.theme, record.description);
       const refinedRecord = await refineSticker(
         record.id,
         {
           selectedPath: selectedCandidate,
           requirement: refinementRequirement.trim(),
+          referenceImagePath: uploadedPath,
         },
         (current, total) => {
           setGenerationProgress({ current, total });
@@ -284,8 +333,59 @@ export function GeneratePage() {
     return () => window.removeEventListener("keydown", handleEscape);
   }, [handleEscape]);
 
+  function handleDragEnter(e: React.DragEvent) {
+    e.preventDefault();
+    e.stopPropagation();
+    dragCounterRef.current += 1;
+    if (e.dataTransfer.items && e.dataTransfer.items.length > 0) {
+      setIsDraggingFile(true);
+    }
+  }
+
+  function handleDragOver(e: React.DragEvent) {
+    e.preventDefault();
+    e.stopPropagation();
+  }
+
+  function handleDragLeave(e: React.DragEvent) {
+    e.preventDefault();
+    e.stopPropagation();
+    dragCounterRef.current -= 1;
+    if (dragCounterRef.current <= 0) {
+      dragCounterRef.current = 0;
+      setIsDraggingFile(false);
+    }
+  }
+
+  function handleDrop(e: React.DragEvent) {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDraggingFile(false);
+    dragCounterRef.current = 0;
+
+    const file = e.dataTransfer.files?.[0];
+    if (file && file.type.startsWith("image/")) {
+      storeReferenceFile(file);
+    }
+  }
+
   return (
-    <section className="generator-card" style={{ "--festival-color": festival.color, "--festival-glow": festival.glow } as CSSProperties}>
+    <section
+      className="generator-card"
+      style={{ "--festival-color": festival.color, "--festival-glow": festival.glow } as CSSProperties}
+      onDragEnter={handleDragEnter}
+      onDragOver={handleDragOver}
+      onDragLeave={handleDragLeave}
+      onDrop={handleDrop}
+    >
+      {isDraggingFile ? (
+        <div className="drop-overlay">
+          <div className="drop-box">
+            <div className="drop-icon">📁</div>
+            <p>Drop image here to use as reference</p>
+          </div>
+        </div>
+      ) : null}
       <div className="ding-hero">
         <h1>🐱 Ding Ding Cat Sticker Generator</h1>
         <p>Describe a cat sticker and let AI bring it to life</p>
@@ -336,6 +436,38 @@ export function GeneratePage() {
             <button className="primary-button" type="submit" disabled={isSubmitting || !description.trim()}>
               {isSubmitting ? "⏳ Generate five" : "✦ Generate five"}
             </button>
+          </div>
+        </div>
+
+        <div>
+          <div className="field-label">Reference image (optional)</div>
+          <div className="upload-area">
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept="image/png,image/jpeg,image/webp,image/gif"
+              className="upload-input"
+              disabled={isSubmitting}
+              onChange={(event) => {
+                const file = event.currentTarget.files?.[0];
+                if (file) {
+                  storeReferenceFile(file);
+                }
+              }}
+            />
+            {referenceImagePreview ? (
+              <div className="upload-preview">
+                <img src={referenceImagePreview} alt="Reference preview" />
+                <button
+                  type="button"
+                  className="upload-remove"
+                  onClick={() => removeReferenceImage()}
+                  aria-label="Remove reference image"
+                >
+                  ✕
+                </button>
+              </div>
+            ) : null}
           </div>
         </div>
 

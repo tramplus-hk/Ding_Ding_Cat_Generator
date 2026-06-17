@@ -48,7 +48,7 @@ describe("stickerStorage", () => {
     assert.equal(updated.status, "rejected");
 
     const persisted = await persistStickerRecord(record.id);
-    assert.equal(persisted.cachePath, expectedCachePath);
+    assert.equal(persisted.cachePath.replace(/\\/g, "/"), expectedCachePath);
     assert.equal(await exists(absoluteCachePath), true);
 
     const cachedJson = JSON.parse(await readFile(absoluteCachePath, "utf8")) as { status: string };
@@ -73,8 +73,8 @@ describe("stickerStorage", () => {
     const firstPersisted = await persistStickerRecord(first.id);
     const secondPersisted = await persistStickerRecord(second.id);
 
-    assert.equal(firstPersisted.cachePath, `data/history/duplicate_${slugify(suffix)}/duplicate_test.json`);
-    assert.equal(secondPersisted.cachePath, `data/history/duplicate_${slugify(suffix)}/duplicate_test_1.json`);
+    assert.equal(firstPersisted.cachePath.replace(/\\/g, "/"), `data/history/duplicate_${slugify(suffix)}/duplicate_test.json`);
+    assert.equal(secondPersisted.cachePath.replace(/\\/g, "/"), `data/history/duplicate_${slugify(suffix)}/duplicate_test_1.json`);
 
     await deleteStickerCache(first.id);
     await deleteStickerCache(second.id);
@@ -96,7 +96,7 @@ describe("stickerStorage", () => {
     });
     const persisted = await persistStickerRecord(updated.id);
 
-    assert.equal(persisted.cachePath, `data/history/history_${slugify(suffix)}/dance_2.json`);
+    assert.equal(persisted.cachePath.replace(/\\/g, "/"), `data/history/history_${slugify(suffix)}/dance_2.json`);
 
     await deleteStickerCache(record.id);
   });
