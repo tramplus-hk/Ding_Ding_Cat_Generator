@@ -34,9 +34,8 @@ assets/lora/*.safetensors
 assets/lora/*.ckpt
 assets/lora/*.pt
 
-# Training / reference images (all subdirs)
+# Training images (large — kept locally, not in git)
 assets/training_images/
-assets/reference_images/
 
 # Generated output and data
 output/
