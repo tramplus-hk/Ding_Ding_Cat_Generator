@@ -1,7 +1,7 @@
-import type { CSSProperties, FormEvent } from "react";
-import { useCallback, useEffect, useState } from "react";
+import type { CSSProperties, DragEvent, FormEvent } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { StickerRecord } from "@sticker-platform/shared";
-import { acceptSticker, createSticker, generateSticker, refineSticker, rejectSticker } from "../lib/api";
+import { acceptSticker, createSticker, generateSticker, refineSticker, rejectSticker, uploadReferenceImage } from "../lib/api";
 
 const FESTIVALS = [
   {
@@ -198,6 +198,13 @@ export function GeneratePage() {
   const [generationProgress, setGenerationProgress] = useState<{ current: number; total: number } | null>(null);
   const [lightboxImage, setLightboxImage] = useState<string | null>(null);
   const [candidatePreviews, setCandidatePreviews] = useState<Record<string, string>>({});
+  const [referenceImagePath, setReferenceImagePath] = useState<string | null>(null);
+  const [referenceImageBlobPathname, setReferenceImageBlobPathname] = useState<string | null>(null);
+  const [referenceImagePreview, setReferenceImagePreview] = useState<string | null>(null);
+  const [pendingReferenceData, setPendingReferenceData] = useState<{ fileName: string; dataUrl: string } | null>(null);
+  const [isDraggingFile, setIsDraggingFile] = useState(false);
+  const dragCounterRef = useRef(0);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   const candidates = record?.result?.candidates ?? [];
   const selectedCandidate = selectedPath ?? record?.result?.selectedPath ?? record?.result?.localPath ?? candidates[0] ?? null;
@@ -205,6 +212,56 @@ export function GeneratePage() {
   function applyPick(prompt: string) {
     setDescription(prompt);
     setIsFestivalOpen(false);
+  }
+
+  async function storeReferenceFile(file: File) {
+    if (!file.type.startsWith("image/")) {
+      setError("Reference file must be an image.");
+      return;
+    }
+
+    setError(null);
+
+    try {
+      const reader = new FileReader();
+      const dataUrl = await new Promise<string>((resolve, reject) => {
+        reader.addEventListener("load", () => resolve(reader.result as string));
+        reader.addEventListener("error", () => reject(new Error("Failed to read reference image")));
+        reader.readAsDataURL(file);
+      });
+
+      setPendingReferenceData({ fileName: file.name, dataUrl });
+      setReferenceImagePreview(dataUrl);
+      setReferenceImagePath(null);
+      setReferenceImageBlobPathname(null);
+    } catch (caughtError) {
+      setError(caughtError instanceof Error ? caughtError.message : "Failed to read reference image");
+    }
+  }
+
+  function removeReferenceImage() {
+    setReferenceImagePath(null);
+    setReferenceImageBlobPathname(null);
+    setReferenceImagePreview(null);
+    setPendingReferenceData(null);
+    if (fileInputRef.current) {
+      fileInputRef.current.value = "";
+    }
+  }
+
+  async function ensureReferenceUploaded(theme: string, description: string): Promise<{ referenceImagePath?: string; referenceImageUrl?: string }> {
+    if (pendingReferenceData) {
+      const uploaded = await uploadReferenceImage(pendingReferenceData.fileName, pendingReferenceData.dataUrl, theme, description);
+      setReferenceImagePath(uploaded.path);
+      setReferenceImageBlobPathname(uploaded.blobPathname ?? null);
+      setPendingReferenceData(null);
+      return { referenceImagePath: uploaded.path, referenceImageUrl: uploaded.blobPathname };
+    }
+
+    return {
+      referenceImagePath: referenceImagePath ?? undefined,
+      referenceImageUrl: referenceImageBlobPathname ?? undefined,
+    };
   }
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
@@ -234,6 +291,7 @@ export function GeneratePage() {
         theme,
         description,
       });
+      const referenceInput = await ensureReferenceUploaded(theme, description);
       setIsSubmitting(false);
       setGenerationProgress({ current: 0, total: 5 });
 
@@ -242,7 +300,7 @@ export function GeneratePage() {
         if (preview) {
           setCandidatePreviews((prev) => ({ ...prev, [candidate]: preview }));
         }
-      }, { theme: festival.id, description });
+      }, { theme: festival.id, description, ...referenceInput });
 
       setRecord(generatedRecord);
       setSelectedPath(generatedRecord.result?.selectedPath ?? generatedRecord.result?.candidates?.[0] ?? null);
@@ -267,12 +325,13 @@ export function GeneratePage() {
     setCandidatePreviews({});
 
     try {
+      const referenceInput = await ensureReferenceUploaded(record.theme, record.description);
       const generatedRecord = await generateSticker(record.id, (current, total, candidate, preview) => {
         setGenerationProgress({ current, total });
         if (preview) {
           setCandidatePreviews((prev) => ({ ...prev, [candidate]: preview }));
         }
-      }, { theme: record.theme, description: record.description });
+      }, { theme: record.theme, description: record.description, ...referenceInput });
       setRecord(generatedRecord);
       setSelectedPath(generatedRecord.result?.selectedPath ?? generatedRecord.result?.candidates?.[0] ?? null);
       setRefinementRequirement("");
@@ -302,11 +361,13 @@ export function GeneratePage() {
     setCandidatePreviews({});
 
     try {
+      const referenceInput = await ensureReferenceUploaded(record.theme, record.description);
       const refinedRecord = await refineSticker(
         record.id,
         {
           selectedPath: selectedCandidate,
           requirement: refinementRequirement.trim(),
+          ...referenceInput,
         },
         (current, total, candidate, preview) => {
           setGenerationProgress({ current, total });
@@ -374,8 +435,60 @@ export function GeneratePage() {
     return () => window.removeEventListener("keydown", handleEscape);
   }, [handleEscape]);
 
+  function handleDragEnter(event: DragEvent<HTMLElement>) {
+    event.preventDefault();
+    event.stopPropagation();
+    dragCounterRef.current += 1;
+    if (event.dataTransfer.items.length > 0) {
+      setIsDraggingFile(true);
+    }
+  }
+
+  function handleDragOver(event: DragEvent<HTMLElement>) {
+    event.preventDefault();
+    event.stopPropagation();
+  }
+
+  function handleDragLeave(event: DragEvent<HTMLElement>) {
+    event.preventDefault();
+    event.stopPropagation();
+    dragCounterRef.current -= 1;
+    if (dragCounterRef.current <= 0) {
+      dragCounterRef.current = 0;
+      setIsDraggingFile(false);
+    }
+  }
+
+  function handleDrop(event: DragEvent<HTMLElement>) {
+    event.preventDefault();
+    event.stopPropagation();
+    setIsDraggingFile(false);
+    dragCounterRef.current = 0;
+
+    const file = event.dataTransfer.files[0];
+    if (file) {
+      void storeReferenceFile(file);
+    }
+  }
+
   return (
-    <main className="page-shell" style={{ "--festival-color": festival.color, "--festival-glow": festival.glow } as CSSProperties} onClick={() => setIsFestivalOpen(false)}>
+    <main
+      className="page-shell"
+      style={{ "--festival-color": festival.color, "--festival-glow": festival.glow } as CSSProperties}
+      onClick={() => setIsFestivalOpen(false)}
+      onDragEnter={handleDragEnter}
+      onDragOver={handleDragOver}
+      onDragLeave={handleDragLeave}
+      onDrop={handleDrop}
+    >
+      {isDraggingFile ? (
+        <div className="drop-overlay">
+          <div className="drop-box">
+            <div className="drop-icon">Image</div>
+            <p>Drop a reference image here</p>
+          </div>
+        </div>
+      ) : null}
       <div className="brand-wash" />
       <nav className="topbar" onClick={(event) => event.stopPropagation()}>
         <img className="brand-logo" src="/tramplus-green.svg" alt="TramPlus" />
@@ -467,6 +580,34 @@ export function GeneratePage() {
               </button>
             </div>
             <p className="helper-text">Quick picks fill the prompt. The review panel keeps refinement, rejection, and upload connected.</p>
+          </div>
+
+          <div className="field-block reference-block">
+            <label>Reference Image</label>
+            <div className="upload-area">
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept="image/png,image/jpeg,image/webp,image/gif"
+                className="upload-input"
+                disabled={isSubmitting || activeAction !== null}
+                onChange={(event) => {
+                  const file = event.currentTarget.files?.[0];
+                  if (file) {
+                    void storeReferenceFile(file);
+                  }
+                }}
+              />
+              {referenceImagePreview ? (
+                <div className="upload-preview">
+                  <img src={referenceImagePreview} alt="Reference preview" />
+                  <button type="button" className="upload-remove" onClick={removeReferenceImage} aria-label="Remove reference image">
+                    x
+                  </button>
+                </div>
+              ) : null}
+            </div>
+            <p className="helper-text">Optional. Upload or drag in visual inspiration to guide generation and refinement.</p>
           </div>
 
           <div className="hint-strip" style={{ background: festival.glow, borderColor: festival.color, color: festival.color }}>

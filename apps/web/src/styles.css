@@ -1188,6 +1188,72 @@ body {
   margin: 10px 0 0;
 }
 
+.reference-block {
+  margin-top: 16px;
+}
+
+.upload-area {
+  align-items: start;
+  display: grid;
+  gap: 12px;
+}
+
+.upload-input {
+  background: #fff;
+  border: 1px dashed var(--tp-ink-150);
+  border-radius: 16px;
+  color: var(--tp-ink-500);
+  font-size: 13px;
+  font-weight: 700;
+  padding: 12px;
+  width: 100%;
+}
+
+.upload-input::file-selector-button {
+  background: var(--tp-ink-900);
+  border: 0;
+  border-radius: 999px;
+  color: #fff;
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 850;
+  margin-right: 12px;
+  padding: 9px 14px;
+}
+
+.upload-preview {
+  background: var(--tp-ink-75);
+  border: 1px solid var(--tp-ink-150);
+  border-radius: 18px;
+  display: inline-flex;
+  padding: 8px;
+  position: relative;
+  width: max-content;
+}
+
+.upload-preview img {
+  border-radius: 12px;
+  max-height: 120px;
+  max-width: min(220px, 100%);
+  object-fit: contain;
+}
+
+.upload-remove {
+  background: var(--tp-ink-900);
+  border: 2px solid #fff;
+  border-radius: 999px;
+  color: #fff;
+  height: 26px;
+  line-height: 1;
+  min-height: 0;
+  padding: 0;
+  position: absolute;
+  right: -8px;
+  top: -8px;
+  width: 26px;
+}
+
 .primary-action,
 .download-button,
 .secondary-cta,
@@ -1389,6 +1455,50 @@ body {
   font-size: 12px;
   font-weight: 750;
   margin-top: 28px;
+}
+
+.drop-overlay {
+  align-items: center;
+  background: rgba(17, 21, 18, 0.6);
+  backdrop-filter: blur(8px);
+  bottom: 0;
+  display: flex;
+  justify-content: center;
+  left: 0;
+  padding: 24px;
+  position: fixed;
+  right: 0;
+  top: 0;
+  z-index: 50;
+}
+
+.drop-box {
+  align-items: center;
+  background: rgba(255, 255, 255, 0.92);
+  border: 2px dashed var(--tp-green);
+  border-radius: 28px;
+  box-shadow: var(--shadow-card);
+  color: var(--tp-ink-700);
+  display: grid;
+  gap: 10px;
+  justify-items: center;
+  padding: 42px 56px;
+}
+
+.drop-icon {
+  background: var(--tp-green-50);
+  border-radius: 999px;
+  color: var(--tp-green);
+  font-size: 13px;
+  font-weight: 900;
+  padding: 10px 16px;
+  text-transform: uppercase;
+}
+
+.drop-box p {
+  font-size: 18px;
+  font-weight: 850;
+  margin: 0;
 }
 
 @keyframes dot-pulse {

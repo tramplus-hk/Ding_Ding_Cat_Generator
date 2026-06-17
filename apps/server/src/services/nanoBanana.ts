@@ -4,7 +4,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { config } from "../config.js";
 import { listDataFolderFileUrls } from "./notion.js";
-import { uploadRuntimeCandidateBlob } from "./runtimeBlob.js";
+import { readRuntimeBlob, uploadRuntimeCandidateBlob } from "./runtimeBlob.js";
 
 const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../../..");
 const generatedRoot = path.join(projectRoot, "data/generated");
@@ -31,6 +31,8 @@ type GenerateOptions = {
   selectedImagePath?: string;
   selectedImageUrl?: string;
   refinementRequirement?: string;
+  referenceImagePath?: string;
+  referenceImageUrl?: string;
   onProgress?: (current: number, total: number, candidatePath: string, previewDataUrl: string) => void;
 };
 
@@ -70,6 +72,9 @@ function buildPlaceholderSvg(record: StickerRecord): string {
 
 
 function buildGenerationPrompt(record: StickerRecord, options: GenerateOptions = {}, variationIndex?: number): string {
+  const referenceBlock = options.referenceImagePath || options.referenceImageUrl
+    ? `\nUSER-PROVIDED REFERENCE IMAGE:\n- The uploaded image contains visual elements the user wants included.\n- Incorporate key visual elements such as objects, colors, or composition ideas from the uploaded image into the sticker design.\n- Ding Ding Cat must remain the primary subject.\n- Adapt the uploaded image elements to the 2D vector flat-graphic sticker style described below.\n`
+    : "";
   const refinementBlock = options.refinementRequirement
     ? `\nREFINEMENT REQUEST:\n- Refine the selected image according to this requirement: ${options.refinementRequirement}\n- Preserve the selected image's strongest composition and Ding Ding Cat identity unless the requirement asks otherwise.\n`
     : "";
@@ -80,7 +85,7 @@ function buildGenerationPrompt(record: StickerRecord, options: GenerateOptions =
   return `${describeTheme(record.theme)}
 
 Sticker description: ${record.description}
-${refinementBlock}${variationBlock}
+${referenceBlock}${refinementBlock}${variationBlock}
 
 CRITICAL CHARACTER DETAILS:
 - This is Ding Ding Cat, the official mascot of Hong Kong Tramways.
@@ -186,6 +191,36 @@ async function loadSelectedImagePart(selectedImagePath?: string, selectedImageUr
   return [await imagePathToContentPart(absolutePath)];
 }
 
+async function loadUserReferencePart(referenceImagePath?: string, referenceImageUrl?: string): Promise<OpenAiContentPart[]> {
+  if (referenceImageUrl) {
+    const body = await readRuntimeBlob(referenceImageUrl);
+
+    if (body) {
+      const extension = path.extname(referenceImagePath ?? referenceImageUrl).toLowerCase();
+      const mimeType = extension === ".webp" ? "image/webp" : extension === ".jpg" || extension === ".jpeg" ? "image/jpeg" : "image/png";
+      return [{ type: "image_url", image_url: { url: `data:${mimeType};base64,${body.toString("base64")}` } }];
+    }
+  }
+
+  if (!referenceImagePath) {
+    return [];
+  }
+
+  const uploadRoot = process.env.VERCEL
+    ? path.join("/tmp", "sticker-platform", "runtime", "uploads")
+    : path.join(projectRoot, ".runtime/uploads");
+  const absolutePath = referenceImagePath.startsWith(".runtime/uploads/")
+    ? path.resolve(uploadRoot, path.relative(".runtime/uploads", referenceImagePath))
+    : path.resolve(projectRoot, referenceImagePath);
+  const isRuntimeUploadPath = absolutePath === uploadRoot || absolutePath.startsWith(`${uploadRoot}${path.sep}`);
+
+  if (!isRuntimeUploadPath) {
+    throw new Error("Reference image must be inside runtime upload storage");
+  }
+
+  return [await imagePathToContentPart(absolutePath)];
+}
+
 function extractImageDataUrl(response: ImageResponse): string | undefined {
   const message = response.choices?.[0]?.message;
   const imageFromImages = message?.images?.find((image) => image.image_url?.url)?.image_url?.url;
@@ -219,6 +254,7 @@ async function generateWithNanoBanana(
   const content: OpenAiContentPart[] = [
     ...(await loadReferenceImageParts(record)),
     ...(await loadSelectedImagePart(options.selectedImagePath, options.selectedImageUrl)),
+    ...(await loadUserReferencePart(options.referenceImagePath, options.referenceImageUrl)),
     { type: "text", text: buildGenerationPrompt(record, options, variationIndex) },
   ];
 
