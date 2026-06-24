@@ -1851,8 +1851,8 @@ body {
   display: grid;
   gap: 10px;
   justify-items: center;
-  min-height: 180px;
-  padding: 12px;
+  min-height: 220px;
+  padding: 14px;
   transition: transform 0.16s ease, box-shadow 0.16s ease;
 }
 
@@ -1876,9 +1876,9 @@ body {
 .candidate-card img {
   background: #fff;
   border-radius: 14px;
-  height: 130px;
+  height: 160px;
   object-fit: contain;
-  padding: 8px;
+  padding: 10px;
   width: 100%;
 }
 
@@ -1887,7 +1887,8 @@ body {
 }
 
 .review-grid {
-  grid-template-columns: 1fr;
+  grid-template-columns: 1fr auto;
+  gap: 14px;
 }
 
 .result-actions {
@@ -1918,8 +1919,8 @@ body {
   gap: 8px;
   justify-content: space-between;
   padding: 12px 16px;
-  width: 100%;
   transition: border-color 0.16s ease, color 0.16s ease;
+  width: 100%;
 }
 
 .collapse-toggle:hover {
@@ -1941,6 +1942,17 @@ body {
   display: grid;
   gap: 12px;
   margin-top: 12px;
+  width: 100%;
+}
+
+.collapse-panel textarea {
+  min-height: 120px;
+  resize: vertical;
+  width: 100%;
+}
+
+.collapse-panel .review-grid {
+  max-width: none;
 }
 
 @keyframes collapse-in {
