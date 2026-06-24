@@ -147,7 +147,7 @@ export function GeneratePage() {
   const [rejectReason, setRejectReason] = useState("");
   const [generationProgress, setGenerationProgress] = useState<{ current: number; total: number } | null>(null);
   const [showRefinePanel, setShowRefinePanel] = useState(false);
-  const [showRejectPanel, setShowRejectPanel] = useState(false);
+  const [showRejectModal, setShowRejectModal] = useState(false);
   const dragCounterRef = useRef(0);
   const photoInputRef = useRef<HTMLInputElement>(null);
 
@@ -261,7 +261,7 @@ export function GeneratePage() {
     setRefinementRequirement("");
     setRejectReason("");
     setShowRefinePanel(false);
-    setShowRejectPanel(false);
+    setShowRejectModal(false);
     setCandidatePreviews({});
 
     try {
@@ -368,6 +368,7 @@ export function GeneratePage() {
     setError(null);
     setMessage(null);
     setBusy(true);
+    setShowRejectModal(false);
 
     try {
       if (action === "reject") {
@@ -562,35 +563,12 @@ export function GeneratePage() {
                   </div>
                 ) : null}
 
-                <button
-                  className={showRejectPanel ? "collapse-toggle open" : "collapse-toggle"}
-                  type="button"
-                  onClick={() => setShowRejectPanel((v) => !v)}
-                >
-                  Reject reason
-                  <span className="toggle-arrow">▼</span>
-                </button>
-                {showRejectPanel ? (
-                  <div className="collapse-panel">
-                    <div className="review-grid">
-                      <label>
-                        <textarea
-                          placeholder="Optional: what went wrong?"
-                          rows={2}
-                          value={rejectReason}
-                          onChange={(e) => setRejectReason(e.target.value)}
-                        />
-                      </label>
-                    </div>
-                    <button className="danger-cta" type="button" disabled={busy} onClick={() => void handleDecision("reject")}>
-                      Reject
-                    </button>
-                  </div>
-                ) : null}
-
                 <div className="result-actions">
                   <button className="primary-action" type="button" disabled={busy || !selectedCandidate} onClick={() => void handleDecision("accept")}>
                     Accept
+                  </button>
+                  <button className="danger-cta" type="button" disabled={busy} onClick={() => setShowRejectModal(true)}>
+                    Reject
                   </button>
                   <button className="secondary-cta" type="button" disabled={busy} onClick={() => void handleRegenerate()}>
                     {busy ? "Regenerating…" : "Regenerate five"}
@@ -664,6 +642,26 @@ export function GeneratePage() {
         <div className="lightbox-overlay" onClick={() => setLightboxImage(null)}>
           <button className="lightbox-close" onClick={() => setLightboxImage(null)} aria-label="Close lightbox">✕</button>
           <img className="lightbox-image" src={lightboxImage} alt="Enlarged sticker" onClick={(e) => e.stopPropagation()} />
+        </div>
+      ) : null}
+
+      {showRejectModal ? (
+        <div className="lightbox-overlay" onClick={() => setShowRejectModal(false)}>
+          <div className="reject-modal" onClick={(e) => e.stopPropagation()}>
+            <h3>Reject reason</h3>
+            <textarea
+              placeholder="What went wrong? This is optional."
+              rows={4}
+              value={rejectReason}
+              onChange={(e) => setRejectReason(e.target.value)}
+            />
+            <div className="reject-modal-actions">
+              <button className="secondary-cta" type="button" onClick={() => setShowRejectModal(false)}>Cancel</button>
+              <button className="danger-cta" type="button" disabled={busy} onClick={() => void handleDecision("reject")}>
+                Confirm reject
+              </button>
+            </div>
+          </div>
         </div>
       ) : null}
     </main>
