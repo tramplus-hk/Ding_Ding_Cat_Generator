@@ -1,6 +1,6 @@
 import { useRef, useState } from "react";
 import type { StickerRecord } from "@sticker-platform/shared";
-import { createSticker, generateSticker, uploadReferenceImage } from "../lib/api";
+import { createSticker, generateSticker, uploadReferenceImage, acceptSticker, rejectSticker } from "../lib/api";
 
 const FESTIVALS = [
   { id: "general", label: "General", desc: "general TramPlus sticker with Hong Kong tram culture, city motion, and clean brand energy",
@@ -136,6 +136,7 @@ export function GeneratePage() {
   const [candidatePreviews, setCandidatePreviews] = useState<Record<string, string>>({});
   const [history, setHistory] = useState<HistoryItem[]>([]);
   const [busy, setBusy] = useState(false);
+  const [actionLoading, setActionLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [photoPreview, setPhotoPreview] = useState<string | null>(null);
@@ -187,6 +188,40 @@ export function GeneratePage() {
   function esc(str: string) {
     const map: Record<string, string> = { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" };
     return str.replace(/[&<>"']/g, (s) => map[s]);
+  }
+
+  async function handleAccept() {
+    if (!record || actionLoading) return;
+    setActionLoading(true);
+    setError(null);
+    setMessage(null);
+    try {
+      const result = await acceptSticker(record.id, { selectedPath: selectedCandidate ?? undefined });
+      setMessage(`Accepted! Notion page: ${result.notionPageId}`);
+      setRecord(null);
+      setCandidatePreviews({});
+    } catch (caughtError) {
+      setError(caughtError instanceof Error ? caughtError.message : "Failed to accept sticker");
+    } finally {
+      setActionLoading(false);
+    }
+  }
+
+  async function handleReject() {
+    if (!record || actionLoading) return;
+    setActionLoading(true);
+    setError(null);
+    setMessage(null);
+    try {
+      const result = await rejectSticker(record.id);
+      setMessage(`Rejected. Notion page: ${result.notionPageId}`);
+      setRecord(null);
+      setCandidatePreviews({});
+    } catch (caughtError) {
+      setError(caughtError instanceof Error ? caughtError.message : "Failed to reject sticker");
+    } finally {
+      setActionLoading(false);
+    }
   }
 
   async function handleGenerate() {
@@ -344,6 +379,12 @@ export function GeneratePage() {
                 <div className="result-badge">AI Generated</div>
                 <img className="result-img" src={resultImageUrl} alt={description} />
                 <div className="actions">
+                  <button className="accept-btn" type="button" onClick={handleAccept} disabled={actionLoading || busy}>
+                    {actionLoading ? <span className="btn-spinner" /> : "✓"} Accept
+                  </button>
+                  <button className="reject-btn" type="button" onClick={handleReject} disabled={actionLoading || busy}>
+                    ✕ Reject
+                  </button>
                   <a className="download" href={resultImageUrl} download>Download</a>
                 </div>
               </div>
