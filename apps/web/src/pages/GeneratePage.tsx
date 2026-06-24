@@ -510,46 +510,6 @@ export function GeneratePage() {
               </div>
             ) : record && record.result?.candidates?.length ? (
               <div className="result-view">
-                <div className="candidate-grid">
-                  {record.result.candidates.map((candidatePath, index) => {
-                    const candidateUrl = getCandidatePreviewUrl(record, candidatePath, candidatePreviews);
-                    const isSelected = candidatePath === (selectedPath ?? record.result?.selectedPath ?? record.result?.candidates?.[0]);
-                    return (
-                      <button
-                        className={isSelected ? "candidate-card selected" : "candidate-card"}
-                        key={candidatePath}
-                        type="button"
-                        onClick={() => setSelectedPath(candidatePath)}
-                      >
-                        <span>Candidate {index + 1}</span>
-                        <img
-                          src={candidateUrl}
-                          alt={`Candidate ${index + 1}: ${record.description}`}
-                          onDoubleClick={() => setLightboxImage(candidateUrl)}
-                        />
-                      </button>
-                    );
-                  })}
-                </div>
-
-                <div className="result-meta">
-                  <p>{selectedCandidate ? "Selected candidate" : "Choose one candidate"}</p>
-                </div>
-
-                <div className="result-actions">
-                  <button className="primary-action" type="button" disabled={busy || !selectedCandidate} onClick={() => void handleDecision("accept")}>
-                    Accept
-                  </button>
-                  <button className="secondary-cta" type="button" disabled={busy} onClick={() => void handleRegenerate()}>
-                    {busy ? "Regenerating…" : "Regenerate five"}
-                  </button>
-                  {selectedCandidate ? (
-                    <a className="download" href={getCandidatePreviewUrl(record, selectedCandidate, candidatePreviews)} download>
-                      Download selected
-                    </a>
-                  ) : null}
-                </div>
-
                 <button
                   className={showRefinePanel ? "collapse-toggle open" : "collapse-toggle"}
                   type="button"
@@ -601,6 +561,46 @@ export function GeneratePage() {
                     </button>
                   </div>
                 ) : null}
+
+                <div className="candidate-grid">
+                  {record.result.candidates.map((candidatePath, index) => {
+                    const candidateUrl = getCandidatePreviewUrl(record, candidatePath, candidatePreviews);
+                    const isSelected = candidatePath === (selectedPath ?? record.result?.selectedPath ?? record.result?.candidates?.[0]);
+                    return (
+                      <button
+                        className={isSelected ? "candidate-card selected" : "candidate-card"}
+                        key={candidatePath}
+                        type="button"
+                        onClick={() => setSelectedPath(candidatePath)}
+                      >
+                        <span>Candidate {index + 1}</span>
+                        <img
+                          src={candidateUrl}
+                          alt={`Candidate ${index + 1}: ${record.description}`}
+                          onDoubleClick={() => setLightboxImage(candidateUrl)}
+                        />
+                      </button>
+                    );
+                  })}
+                </div>
+
+                <div className="result-meta">
+                  <p>{selectedCandidate ? "Selected candidate" : "Choose one candidate"}</p>
+                </div>
+
+                <div className="result-actions">
+                  <button className="primary-action" type="button" disabled={busy || !selectedCandidate} onClick={() => void handleDecision("accept")}>
+                    Accept
+                  </button>
+                  <button className="secondary-cta" type="button" disabled={busy} onClick={() => void handleRegenerate()}>
+                    {busy ? "Regenerating…" : "Regenerate five"}
+                  </button>
+                  {selectedCandidate ? (
+                    <a className="download" href={getCandidatePreviewUrl(record, selectedCandidate, candidatePreviews)} download>
+                      Download selected
+                    </a>
+                  ) : null}
+                </div>
               </div>
             ) : (
               <div className="result-empty">
