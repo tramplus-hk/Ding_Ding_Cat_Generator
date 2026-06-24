@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { useId, useRef, useState } from "react";
 import type { StickerRecord } from "@sticker-platform/shared";
 import { createSticker, generateSticker, uploadReferenceImage } from "../lib/api";
 
@@ -140,6 +140,7 @@ export function GeneratePage() {
   const [message, setMessage] = useState<string | null>(null);
   const [photoPreview, setPhotoPreview] = useState<string | null>(null);
   const [pendingPhoto, setPendingPhoto] = useState<{ fileName: string; dataUrl: string } | null>(null);
+  const referencePhotoInputId = useId();
   const photoInputRef = useRef<HTMLInputElement>(null);
 
   const currentFestival = FESTIVALS.find((f) => f.id === festivalId) ?? FESTIVALS[0];
@@ -370,7 +371,7 @@ export function GeneratePage() {
               <small>Optional: students can add a reference photo before generating their Ding Ding Cat design.</small>
             </div>
             <div className="upload-row">
-              <button className="upload-button" type="button" onClick={() => photoInputRef.current?.click()}>Choose photo</button>
+              <label className="upload-button" htmlFor={referencePhotoInputId}>Choose photo</label>
               <div className="upload-preview">
                 {photoPreview ? (
                   <img src={photoPreview} alt="Selected photo preview" />
@@ -379,7 +380,7 @@ export function GeneratePage() {
                 )}
               </div>
             </div>
-            <input ref={photoInputRef} className="hidden-input" type="file" accept="image/*" onChange={(e) => {
+            <input id={referencePhotoInputId} ref={photoInputRef} className="hidden-input" type="file" accept="image/*" onChange={(e) => {
               const file = e.target.files?.[0];
               if (file) handlePhotoSelect(file);
             }} />
