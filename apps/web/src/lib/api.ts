@@ -35,8 +35,8 @@ export function uploadReferenceImage(
   data: string,
   theme: string,
   description: string,
-): Promise<{ path: string; blobPathname?: string }> {
-  return request<{ path: string; blobPathname?: string }>("/api/stickers/upload-reference", {
+): Promise<{ path: string; blobPathname?: string; notionPageId: string }> {
+  return request<{ path: string; blobPathname?: string; notionPageId: string }>("/api/stickers/upload-reference", {
     body: JSON.stringify({ fileName, data, theme, description }),
     method: "POST",
   });

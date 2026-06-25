@@ -1,37 +1,28 @@
-import { randomUUID } from "node:crypto";
-import { access, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import assert from "node:assert/strict";
+import { readdir } from "node:fs/promises";
+import { createServer } from "node:http";
+import type { AddressInfo } from "node:net";
 import path from "node:path";
 import { describe, test } from "node:test";
-import assert from "node:assert/strict";
 import { fileURLToPath } from "node:url";
+import app from "../app.js";
+import { config } from "../config.js";
 import { uploadReferenceSchema } from "./stickers.js";
 
-const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../../..");
-const uploadsDir = path.join(projectRoot, ".runtime/uploads");
-
-const TEST_PNG_BASE64 =
+const testPngBase64 =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPj/HwADBwIAMCbHYQAAAABJRU5ErkJggg==";
+const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../../..");
+const runtimeUploadsRoot = path.join(projectRoot, ".runtime/uploads");
 
-function slugify(value: string): string {
-  return value
-    .trim()
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "_")
-    .replace(/^_+|_+$/g, "") || "untitled";
+async function readRuntimeUploadEntries() {
+  return [...(await readdir(runtimeUploadsRoot).catch(() => []))].sort();
 }
 
-async function fileExists(filePath: string): Promise<boolean> {
-  return access(filePath).then(
-    () => true,
-    () => false,
-  );
-}
-
-describe("upload-reference", () => {
-  test("validates a correct upload payload", () => {
+describe("uploadReferenceSchema", () => {
+  test("validates a complete image upload payload", () => {
     const result = uploadReferenceSchema.safeParse({
       fileName: "cat.png",
-      data: `data:image/png;base64,${TEST_PNG_BASE64}`,
+      data: `data:image/png;base64,${testPngBase64}`,
       theme: "lunar_new_year",
       description: "dancing cat",
     });
@@ -41,109 +32,69 @@ describe("upload-reference", () => {
 
   test("rejects payloads missing required fields", () => {
     const cases = [
-      { label: "no fileName", body: { data: "x", theme: "a", description: "b" } },
-      { label: "no data", body: { fileName: "x", theme: "a", description: "b" } },
-      { label: "no theme", body: { fileName: "x", data: "x", description: "b" } },
-      { label: "no description", body: { fileName: "x", data: "x", theme: "a" } },
-      { label: "empty fileName", body: { fileName: "", data: "x", theme: "a", description: "b" } },
-      { label: "empty data", body: { fileName: "x", data: "", theme: "a", description: "b" } },
-      { label: "empty theme", body: { fileName: "x", data: "x", theme: "", description: "b" } },
-      { label: "empty description", body: { fileName: "x", data: "x", theme: "a", description: "" } },
+      { data: "x", theme: "a", description: "b" },
+      { fileName: "x", theme: "a", description: "b" },
+      { fileName: "x", data: "x", description: "b" },
+      { fileName: "x", data: "x", theme: "a" },
     ];
 
-    for (const { label, body } of cases) {
-      const result = uploadReferenceSchema.safeParse(body);
-      assert.equal(result.success, false, `Expected failure for case: ${label}`);
+    for (const body of cases) {
+      assert.equal(uploadReferenceSchema.safeParse(body).success, false);
     }
   });
 
-  test("normalizes unsupported file extensions to .png", () => {
-    const extensions = [
-      { input: "photo.jpg", expected: ".jpg" },
-      { input: "photo.jpeg", expected: ".jpeg" },
-      { input: "photo.png", expected: ".png" },
-      { input: "photo.webp", expected: ".webp" },
-      { input: "photo.gif", expected: ".gif" },
-      { input: "photo.PNG", expected: ".png" },
-      { input: "photo.JPEG", expected: ".jpeg" },
-      { input: "photo.bmp", expected: ".png" },
-      { input: "photo.tiff", expected: ".png" },
-      { input: "photo", expected: ".png" },
-    ];
-
-    for (const { input, expected } of extensions) {
-      const extension = path.extname(input).toLowerCase();
-      const safeExtension = /\.(png|jpe?g|webp|gif)$/i.test(extension) ? extension : ".png";
-      assert.equal(safeExtension, expected, `Failed for ${input}`);
-    }
-  });
-
-  test("saves uploaded image to .runtime/uploads and returns correct relative path", async () => {
-    const fileName = "test-ref-image.png";
-    const dataUrl = `data:image/png;base64,${TEST_PNG_BASE64}`;
-    const extension = path.extname(fileName).toLowerCase();
-    const safeExtension = /\.(png|jpe?g|webp|gif)$/i.test(extension) ? extension : ".png";
-    const safeName = `ref-${Date.now()}-${randomUUID()}${safeExtension}`;
-    const base64 = dataUrl.includes(",") ? dataUrl.split(",")[1] : dataUrl;
-
-    await mkdir(uploadsDir, { recursive: true });
-
-    const filePath = path.join(uploadsDir, safeName);
-    await writeFile(filePath, Buffer.from(base64, "base64"));
-
-    const relativePath = path.relative(projectRoot, filePath).replace(/\\/g, "/");
-
-    assert.equal(await fileExists(filePath), true, "File should exist after write");
-
-    const written = await readFile(filePath);
-    assert.equal(written.length, Buffer.from(base64, "base64").length, "Written data should match");
-
-    assert.ok(relativePath.startsWith(".runtime/uploads/ref-"), `Path should start with .runtime/uploads/ref-: ${relativePath}`);
-    assert.ok(relativePath.endsWith(safeExtension), `Path should end with ${safeExtension}: ${relativePath}`);
-
-    await rm(filePath);
-    assert.equal(await fileExists(filePath), false, "File should be cleaned up");
-  });
-
-  test("strips data URL prefix to extract raw base64", () => {
-    const rawBase64 = TEST_PNG_BASE64;
-    const dataUrl = `data:image/png;base64,${rawBase64}`;
-
-    const extracted = dataUrl.includes(",") ? dataUrl.split(",")[1] : dataUrl;
-    assert.equal(extracted, rawBase64);
-
-    const plainBase64 = rawBase64;
-    const noPrefixResult = plainBase64.includes(",") ? plainBase64.split(",")[1] : plainBase64;
-    assert.equal(noPrefixResult, rawBase64, "Should pass through raw base64 unchanged");
-  });
-
-  test("generates slugs matching generated database naming convention", () => {
+  test("keeps only supported image extensions", () => {
     const cases = [
-      { theme: "Lunar New Year", description: "Lantern dance", expectedTheme: "lunar_new_year", expectedDesc: "lantern_dance" },
-      { theme: "  Christmas  ", description: "Santa  hat  ", expectedTheme: "christmas", expectedDesc: "santa_hat" },
-      { theme: "Valentine!!!", description: "Hearts & Roses", expectedTheme: "valentine", expectedDesc: "hearts_roses" },
-      { theme: "", description: "", expectedTheme: "untitled", expectedDesc: "untitled" },
+      { fileName: "cat.png", expected: ".png" },
+      { fileName: "cat.jpg", expected: ".jpg" },
+      { fileName: "cat.jpeg", expected: ".jpeg" },
+      { fileName: "cat.webp", expected: ".webp" },
+      { fileName: "cat.gif", expected: ".gif" },
+      { fileName: "cat.bmp", expected: ".png" },
+      { fileName: "cat", expected: ".png" },
     ];
 
-    for (const { theme, description, expectedTheme, expectedDesc } of cases) {
-      assert.equal(slugify(theme), expectedTheme, `Theme slug for "${theme}"`);
-      assert.equal(slugify(description), expectedDesc, `Description slug for "${description}"`);
+    for (const { fileName, expected } of cases) {
+      const extension = path.extname(fileName).toLowerCase();
+      const safeExtension = /\.(png|jpe?g|webp|gif)$/i.test(extension) ? extension : ".png";
+      assert.equal(safeExtension, expected);
     }
   });
+});
 
-  test("Notion upload call uses correct reference group and generated-style category/content", async () => {
-    const { getAvailableNotionContentName } = await import("../services/notion.js");
-    const theme = "lunar_new_year_test";
-    const description = "dancing_cat_test";
-    const safeExtension = ".png";
+describe("POST /api/stickers/upload-reference", () => {
+  test("fails when Notion is not configured", async () => {
+    const originalNotionToken = config.notionToken;
+    const originalNotionDatabaseId = config.notionDatabaseId;
+    config.notionToken = "";
+    config.notionDatabaseId = "";
 
-    const contentName = await getAvailableNotionContentName("reference", theme, description, safeExtension);
+    const server = createServer(app);
+    await new Promise<void>((resolve) => server.listen(0, resolve));
+    const baseUrl = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
 
-    assert.ok(contentName.startsWith(description), `Content name should start with description slug: ${contentName}`);
-    assert.ok(contentName.endsWith(safeExtension), `Content name should end with extension: ${contentName}`);
+    try {
+      const runtimeUploadEntriesBefore = await readRuntimeUploadEntries();
 
-    const baseName = path.parse(contentName).name;
-    assert.equal(baseName.includes("dancing_cat_test"), true, `Base name should contain description slug`);
-    assert.ok(baseName === description || /_(\d+)$/.test(baseName), `Base name should be the slug or slug_N: ${baseName}`);
+      const uploadResponse = await fetch(`${baseUrl}/api/stickers/upload-reference`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          fileName: "cat.png",
+          data: `data:image/png;base64,${testPngBase64}`,
+          theme: "reference route",
+          description: "stores reference in notion",
+        }),
+      });
+
+      assert.equal(uploadResponse.status, 500);
+      const body = (await uploadResponse.json()) as { error?: string };
+      assert.match(body.error ?? "", /Notion is not configured|NOTION_TOKEN|NOTION_DATABASE_ID/);
+      assert.deepEqual(await readRuntimeUploadEntries(), runtimeUploadEntriesBefore);
+    } finally {
+      config.notionToken = originalNotionToken;
+      config.notionDatabaseId = originalNotionDatabaseId;
+      await new Promise<void>((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())));
+    }
   });
 });

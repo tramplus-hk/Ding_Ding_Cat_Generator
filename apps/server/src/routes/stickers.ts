@@ -98,6 +98,12 @@ function withoutCandidatePreviews(record: StickerRecord): StickerRecord {
   return { ...record, result };
 }
 
+function assertNotionConfigured(): void {
+  if (!config.notionToken || !config.notionDatabaseId) {
+    throw Object.assign(new Error("Notion is not configured"), { statusCode: 500 });
+  }
+}
+
 async function getAcceptedStickerPaths(record: Awaited<ReturnType<typeof getStickerRecord>>, selectedPath?: string) {
   if (!record) {
     throw new Error("Sticker record not found");
@@ -131,6 +137,8 @@ stickersRouter.post("/upload-reference", async (req, res, next) => {
     const base64 = input.data.includes(",") ? input.data.split(",", 2)[1] : input.data;
     const body = Buffer.from(base64, "base64");
 
+    assertNotionConfigured();
+
     await mkdir(runtimeUploadsRoot, { recursive: true });
 
     const filePath = path.join(runtimeUploadsRoot, safeName);
@@ -139,28 +147,28 @@ stickersRouter.post("/upload-reference", async (req, res, next) => {
     const relativePath = process.env.VERCEL
       ? `.runtime/uploads/${safeName}`
       : path.relative(projectRoot, filePath).replace(/\\/g, "/");
-    const recordKey = `${slugify(input.theme)}-${slugify(input.description)}`;
+    const themeSlug = slugify(input.theme);
+    const descriptionSlug = slugify(input.description);
+    const recordKey = `${themeSlug}-${descriptionSlug}`;
     const blobPathname = await uploadRuntimeReferenceBlob(recordKey, relativePath, body);
 
-    try {
-      const themeSlug = slugify(input.theme);
-      const descriptionSlug = slugify(input.description);
-      const contentName = await getAvailableNotionContentName("reference", themeSlug, descriptionSlug, safeExtension);
+    const contentName = await getAvailableNotionContentName("reference", themeSlug, descriptionSlug, safeExtension);
+    const notionPageId = await uploadDataFolderFile({
+      group: "reference",
+      category: themeSlug,
+      content: contentName,
+      relativePath,
+      absolutePath: filePath,
+      data: body,
+      sizeBytes: body.byteLength,
+      updatedAt: new Date().toISOString(),
+    });
 
-      await uploadDataFolderFile({
-        group: "reference",
-        category: themeSlug,
-        content: contentName,
-        relativePath,
-        absolutePath: filePath,
-        sizeBytes: body.byteLength,
-        updatedAt: new Date().toISOString(),
-      });
-    } catch {
-      // Notion upload is best-effort for reference images
+    if (notionPageId === "notion-not-configured") {
+      throw Object.assign(new Error("Notion is not configured"), { statusCode: 500 });
     }
 
-    res.json({ path: relativePath, blobPathname });
+    res.json({ path: relativePath, blobPathname, notionPageId });
   } catch (error) {
     next(error);
   }

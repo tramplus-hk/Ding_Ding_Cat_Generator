@@ -10,9 +10,9 @@ const notionVersion = "2022-06-28";
 const notionFileUploadVersion = "2026-03-11";
 const dataGroupTitles = {
   baseline: "baseline",
+  reference: "reference",
   generated: "generated",
   history: "history",
-  reference: "reference",
 } as const;
 const rejectedDatabaseTitle = "rejected";
 const dataFolderDatabaseProperties = {
@@ -40,7 +40,7 @@ const rejectedDatabaseProperties = {
   "Updated At": { date: {} },
 };
 
-export type DataFolderGroup = "baseline" | "generated" | "history" | "reference";
+export type DataFolderGroup = "baseline" | "reference" | "generated" | "history";
 
 export type DataFolderFile = {
   group: DataFolderGroup;
@@ -660,35 +660,9 @@ async function findRejectedPage(databaseId: string, recordId: string): Promise<s
   return response.results?.[0]?.id;
 }
 
-async function getAvailableRejectedName(baseName: string): Promise<string> {
-  const databaseId = await getRejectedDatabaseId();
-
-  if (!databaseId) {
-    return baseName;
-  }
-
-  const pages = await listDatabasePages(databaseId);
-  const usedNames = new Set(
-    pages.map((page) => getTitleProperty(page, "Name") ?? ""),
-  );
-  let index = 0;
-
-  while (true) {
-    const candidateName = index === 0 ? baseName : `${baseName}_${index}`;
-
-    if (!usedNames.has(candidateName)) {
-      return candidateName;
-    }
-
-    index += 1;
-  }
-}
-
-async function buildRejectedProperties(record: StickerRecord, reason?: string) {
-  const name = await getAvailableRejectedName(record.description);
-
+function buildRejectedProperties(record: StickerRecord, reason?: string) {
   return {
-    Name: title(name),
+    Name: title(`${record.theme}/${record.description}`),
     "Record ID": richText(record.id),
     Theme: richText(record.theme),
     Motion: richText(record.description),
@@ -739,7 +713,7 @@ export async function uploadRejectedStickerRun(record: StickerRecord, reason?: s
     }),
   );
   const uploadedFiles = candidateFiles.filter((entry): entry is NonNullable<typeof entry> => entry !== null);
-  const properties = await buildRejectedProperties(record, reason);
+  const properties = buildRejectedProperties(record, reason);
   const existingPageId = await findRejectedPage(databaseId, record.id);
 
   if (existingPageId) {
@@ -774,7 +748,7 @@ export async function uploadRejectedStickerRun(record: StickerRecord, reason?: s
 function dataFileFromRelativePath(relativePath: string): DataFolderFile | undefined {
   const [dataRoot, group, category, ...rest] = relativePath.split(path.sep);
 
-  if (dataRoot !== "data" || !category || !["baseline", "generated", "history", "reference"].includes(group)) {
+  if (dataRoot !== "data" || !category || !["baseline", "reference", "generated", "history"].includes(group)) {
     return undefined;
   }
 

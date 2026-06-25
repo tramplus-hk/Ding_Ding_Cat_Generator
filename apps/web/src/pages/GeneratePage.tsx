@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useRef, useState } from "react";
 import type { StickerRecord } from "@sticker-platform/shared";
 import { acceptSticker, createSticker, generateSticker, refineSticker, rejectSticker, uploadReferenceImage } from "../lib/api";
 
@@ -140,12 +140,15 @@ export function GeneratePage() {
   const [message, setMessage] = useState<string | null>(null);
   const [photoPreview, setPhotoPreview] = useState<string | null>(null);
   const [pendingPhoto, setPendingPhoto] = useState<{ fileName: string; dataUrl: string } | null>(null);
+  const referencePhotoInputId = useId();
   const [isDraggingFile, setIsDraggingFile] = useState(false);
   const [lightboxImage, setLightboxImage] = useState<string | null>(null);
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
   const [refinementRequirement, setRefinementRequirement] = useState("");
   const [rejectReason, setRejectReason] = useState("");
   const [generationProgress, setGenerationProgress] = useState<{ current: number; total: number } | null>(null);
+  const [showRefinePanel, setShowRefinePanel] = useState(false);
+  const [showRejectModal, setShowRejectModal] = useState(false);
   const dragCounterRef = useRef(0);
   const photoInputRef = useRef<HTMLInputElement>(null);
 
@@ -258,6 +261,8 @@ export function GeneratePage() {
     setSelectedPath(null);
     setRefinementRequirement("");
     setRejectReason("");
+    setShowRefinePanel(false);
+    setShowRejectModal(false);
     setCandidatePreviews({});
 
     try {
@@ -364,6 +369,7 @@ export function GeneratePage() {
     setError(null);
     setMessage(null);
     setBusy(true);
+    setShowRejectModal(false);
 
     try {
       if (action === "reject") {
@@ -532,48 +538,47 @@ export function GeneratePage() {
                   <p>{selectedCandidate ? "Selected candidate" : "Choose one candidate"}</p>
                 </div>
 
-                <div className="review-grid">
-                  <label>
-                    Fine-tune requirement
-                    <textarea
-                      placeholder="e.g. make the lantern bigger, simplify the background, keep the same pose"
-                      rows={3}
-                      value={refinementRequirement}
-                      onChange={(e) => setRefinementRequirement(e.target.value)}
-                    />
-                  </label>
-                  <button className="secondary-cta" type="button" disabled={busy || !selectedCandidate} onClick={() => void handleRefine()}>
-                    {busy ? "Refining…" : "Refine selected"}
-                  </button>
-                </div>
+                <button
+                  className={showRefinePanel ? "collapse-toggle open" : "collapse-toggle"}
+                  type="button"
+                  onClick={() => setShowRefinePanel((v) => !v)}
+                >
+                  Fine-tune requirement
+                  <span className="toggle-arrow">▼</span>
+                </button>
+                {showRefinePanel ? (
+                  <div className="collapse-panel">
+                    <div className="review-grid">
+                      <label>
+                        <textarea
+                          placeholder="e.g. make the lantern bigger, simplify the background, keep the same pose"
+                          rows={3}
+                          value={refinementRequirement}
+                          onChange={(e) => setRefinementRequirement(e.target.value)}
+                        />
+                      </label>
+                      <button className="secondary-cta" type="button" disabled={busy || !selectedCandidate} onClick={() => void handleRefine()}>
+                        {busy ? "Refining…" : "Refine selected"}
+                      </button>
+                    </div>
+                  </div>
+                ) : null}
 
-                <div className="review-grid">
-                  <label>
-                    Reject reason
-                    <textarea
-                      placeholder="Optional: what went wrong?"
-                      rows={2}
-                      value={rejectReason}
-                      onChange={(e) => setRejectReason(e.target.value)}
-                    />
-                  </label>
+                <div className="result-actions">
+                  <button className="primary-action" type="button" disabled={busy || !selectedCandidate} onClick={() => void handleDecision("accept")}>
+                    Accept
+                  </button>
+                  <button className="danger-cta" type="button" disabled={busy} onClick={() => setShowRejectModal(true)}>
+                    Reject
+                  </button>
+                  <button className="secondary-cta" type="button" disabled={busy} onClick={() => void handleRegenerate()}>
+                    {busy ? "Regenerating…" : "Regenerate five"}
+                  </button>
                   {selectedCandidate ? (
                     <a className="download" href={getCandidatePreviewUrl(record, selectedCandidate, candidatePreviews)} download>
                       Download selected
                     </a>
                   ) : null}
-                </div>
-
-                <div className="result-actions">
-                  <button className="secondary-cta" type="button" disabled={busy} onClick={() => void handleRegenerate()}>
-                    {busy ? "Regenerating…" : "Regenerate five"}
-                  </button>
-                  <button className="danger-cta" type="button" disabled={busy} onClick={() => void handleDecision("reject")}>
-                    Reject
-                  </button>
-                  <button className="primary-action" type="button" disabled={busy || !selectedCandidate} onClick={() => void handleDecision("accept")}>
-                    Accept
-                  </button>
                 </div>
               </div>
             ) : (
@@ -599,7 +604,7 @@ export function GeneratePage() {
               <small>Optional: students can add a reference photo before generating their Ding Ding Cat design.</small>
             </div>
             <div className="upload-row">
-              <button className="upload-button" type="button" onClick={() => photoInputRef.current?.click()}>Choose photo</button>
+              <label className="upload-button" htmlFor={referencePhotoInputId}>Choose photo</label>
               <div className="upload-preview">
                 {photoPreview ? (
                   <img src={photoPreview} alt="Selected photo preview" />
@@ -608,7 +613,7 @@ export function GeneratePage() {
                 )}
               </div>
             </div>
-            <input ref={photoInputRef} className="hidden-input" type="file" accept="image/*" onChange={(e) => {
+            <input id={referencePhotoInputId} ref={photoInputRef} className="hidden-input" type="file" accept="image/*" onChange={(e) => {
               const file = e.target.files?.[0];
               if (file) handlePhotoSelect(file);
             }} />
@@ -638,6 +643,26 @@ export function GeneratePage() {
         <div className="lightbox-overlay" onClick={() => setLightboxImage(null)}>
           <button className="lightbox-close" onClick={() => setLightboxImage(null)} aria-label="Close lightbox">✕</button>
           <img className="lightbox-image" src={lightboxImage} alt="Enlarged sticker" onClick={(e) => e.stopPropagation()} />
+        </div>
+      ) : null}
+
+      {showRejectModal ? (
+        <div className="lightbox-overlay" onClick={() => setShowRejectModal(false)}>
+          <div className="reject-modal" onClick={(e) => e.stopPropagation()}>
+            <h3>Reject reason</h3>
+            <textarea
+              placeholder="What went wrong? This is optional."
+              rows={4}
+              value={rejectReason}
+              onChange={(e) => setRejectReason(e.target.value)}
+            />
+            <div className="reject-modal-actions">
+              <button className="secondary-cta" type="button" onClick={() => setShowRejectModal(false)}>Cancel</button>
+              <button className="danger-cta" type="button" disabled={busy} onClick={() => void handleDecision("reject")}>
+                Confirm reject
+              </button>
+            </div>
+          </div>
         </div>
       ) : null}
     </main>
