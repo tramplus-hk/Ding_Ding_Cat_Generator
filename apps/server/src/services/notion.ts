@@ -670,7 +670,7 @@ function buildRejectedProperties(record: StickerRecord, reason?: string) {
     "Reject Reason": richText(reason),
     "Selected Candidate": richText(record.result?.selectedPath),
     "Candidate Count": number(record.result?.candidates?.length ?? 0),
-    Model: select(record.result?.provider ?? "nano-banana-2"),
+    Model: select(record.result?.provider ?? "gpt-image-2"),
     "Created At": date(record.createdAt),
     "Updated At": date(record.updatedAt),
   };

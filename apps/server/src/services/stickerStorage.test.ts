@@ -89,7 +89,7 @@ describe("stickerStorage", () => {
     });
     const updated = await updateStickerRecord(record.id, {
       result: {
-        provider: "nano-banana-2",
+        provider: "gpt-image-2",
         format: "svg",
         localPath: `data/generated/history_${slugify(suffix)}/dance_2.png`,
       },
