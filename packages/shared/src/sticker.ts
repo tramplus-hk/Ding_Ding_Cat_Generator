@@ -21,7 +21,7 @@ export const createStickerSchema = z.object({
 });
 
 export const stickerResultSchema = z.object({
-  provider: z.literal("nano-banana-2"),
+  provider: z.enum(["gpt-image-2", "nano-banana-2", "placeholder"]),
   format: stickerFormatSchema,
   localPath: z.string().optional(),
   fileUrl: z.string().optional(),

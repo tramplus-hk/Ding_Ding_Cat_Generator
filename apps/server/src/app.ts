@@ -63,6 +63,7 @@ app.use((error: unknown, _req: express.Request, res: express.Response, _next: ex
   const statusCode =
     error instanceof Error && "statusCode" in error && typeof error.statusCode === "number" ? error.statusCode : 500;
 
+  console.error("Sticker API error", error);
   res.status(statusCode).json({ error: message });
 });
 
