@@ -1,8 +1,8 @@
 # Sticker Generation Platform
 
-Internal sticker generation platform built with Vite, React, TypeScript, and an Express backend. The goal is to let internal users submit sticker prompts, generate sticker assets with Nano Banana 2, review the result, and upload only accepted final JSON records to Notion.
+Internal sticker generation platform built with Vite, React, TypeScript, and an Express backend. The goal is to let internal users submit sticker prompts, generate sticker assets with the configured image-generation model, review the result, and upload only accepted final JSON records to Notion.
 
-This repository currently implements the local workflow foundation. It contains app structure, shared schemas, file-backed local JSON cache, Express-side Nano Banana 2 generation, placeholder fallback asset storage, a placeholder Notion service boundary, and a basic review UI. It does not yet implement real Notion writes.
+This repository currently implements the local workflow foundation. It contains app structure, shared schemas, file-backed local JSON cache, Express-side image generation, placeholder fallback asset storage, a placeholder Notion service boundary, and a basic review UI. It does not yet implement real Notion writes.
 
 ## Architecture
 
@@ -13,7 +13,7 @@ apps/web
 
 apps/server
   Express TypeScript backend
-  API routes, local cache boundary, Nano Banana 2 boundary, Notion boundary
+  API routes, local cache boundary, image generation boundary, Notion boundary
 
 packages/shared
   Shared Zod schemas and TypeScript types
@@ -29,7 +29,7 @@ data
 3. Server generates five runtime-only candidate stickers for the first trial.
 4. User selects the most suitable candidate in the web app.
 5. If none are suitable, user regenerates five new candidates.
-6. If one is close, user can provide a fine-tune requirement; the selected image and prompt are sent back to Nano Banana 2 for five refined candidates.
+6. If one is close, user can provide a fine-tune requirement; the selected image and prompt are sent back to the configured image-generation model for five refined candidates.
 7. When accepted, the selected image is copied to the final theme folder and the JSON cache is written with the final file URL.
 8. The final JSON is uploaded to Notion.
 9. The accepted JSON and final image remain under `data/`.
@@ -90,7 +90,7 @@ type StickerRecord = {
     | "uploaded"
     | "upload_failed";
   result?: {
-    provider: "nano-banana-2";
+    provider: "gpt-image-2" | "nano-banana-2" | "placeholder";
     format: "svg" | "gif";
     localPath?: string;
     fileUrl?: string;
@@ -150,9 +150,9 @@ data/generated/
 
 Trial candidates are stored outside `data/` under `.runtime/generated` while the user is deciding. Only the accepted image is copied into `data/generated`.
 
-When `NANO_BANANA_API_KEY` or `AI_GATEWAY_API_KEY` is configured, the Express backend calls the OpenAI-compatible Nano Banana endpoint and saves the accepted image as `<motion_name>.png`. If that motion filename already exists for the theme, it appends `_1`, `_2`, and so on. Without credentials, it writes local placeholder files so the workflow remains usable.
+When `IMAGE_GENERATION_API_KEY`, `OPENAI_API_KEY`, `NANO_BANANA_API_KEY`, or `AI_GATEWAY_API_KEY` is configured, the Express backend calls the configured image-generation endpoint and saves the accepted image as `<motion_name>.png`. If that motion filename already exists for the theme, it appends `_1`, `_2`, and so on. Without credentials, it writes local placeholder files so the workflow remains usable.
 
-Nano Banana receives image references from:
+The image-generation model receives image references from:
 
 - `data/baseline/**`: original mascot/reference material.
 - `data/generated/<theme_key>/**`: previous generated stickers for the same theme.
@@ -168,9 +168,16 @@ SERVER_PORT=4000
 WEB_ORIGIN=http://localhost:5173
 VITE_API_BASE_URL=
 
+IMAGE_GENERATION_API_KEY=
+IMAGE_GENERATION_API_URL=https://ai-gateway.vercel.sh/v1
+IMAGE_GENERATION_MODEL=openai/gpt-image-2
+
+OPENAI_API_KEY=
+
+# Legacy and alternative key names supported by the server.
 NANO_BANANA_API_KEY=
-NANO_BANANA_API_URL=https://ai-gateway.vercel.sh/v1
-NANO_BANANA_MODEL=google/gemini-3.1-flash-image-preview
+NANO_BANANA_API_URL=
+NANO_BANANA_MODEL=
 AI_GATEWAY_API_KEY=
 
 NOTION_TOKEN=
@@ -244,7 +251,7 @@ Current behavior:
 
 - `POST /api/stickers` validates input and creates an in-memory draft record.
 - `POST /api/stickers/:id/generate` creates five runtime-only candidates and updates the draft record with `result.candidates`.
-- `POST /api/stickers/:id/refine` sends the selected candidate and fine-tune requirement back to Nano Banana 2, then returns five refined candidates.
+- `POST /api/stickers/:id/refine` sends the selected candidate and fine-tune requirement back to the configured image-generation model, then returns five refined candidates.
 - `POST /api/stickers/:id/accept` uploads the selected runtime candidate to the Notion `generated` table, writes the accepted JSON to the Notion `history` table, clears the runtime draft, and returns the Notion page ID.
 - `POST /api/stickers/:id/reject` uploads the rejected runtime candidates and optional rejection reason to the Notion `rejected` table, then clears the runtime draft.
 
