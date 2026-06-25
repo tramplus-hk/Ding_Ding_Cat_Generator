@@ -194,4 +194,47 @@ describe("POST /api/stickers/:id/generate", () => {
       await new Promise<void>((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())));
     }
   });
+
+  test("generates one candidate by default to avoid repeated long provider calls", async () => {
+    const originalImageGenerationApiKey = config.imageGenerationApiKey;
+    config.imageGenerationApiKey = "";
+
+    const server = createServer(app);
+    await new Promise<void>((resolve) => server.listen(0, resolve));
+    const baseUrl = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+
+    try {
+      const createResponse = await fetch(`${baseUrl}/api/stickers`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          format: "svg",
+          theme: "stream route",
+          description: "limits provider calls",
+        }),
+      });
+      assert.equal(createResponse.status, 201);
+      const record = (await createResponse.json()) as { id: string };
+
+      const generateResponse = await fetch(`${baseUrl}/api/stickers/${record.id}/generate`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+      });
+
+      assert.equal(generateResponse.status, 200);
+      const streamText = await generateResponse.text();
+      const events = streamText
+        .split("\n")
+        .filter((line) => line.startsWith("data: "))
+        .map((line) => JSON.parse(line.slice(6)) as { type?: string; record?: { result?: { candidates?: string[] } } });
+      const progressEvents = events.filter((event) => event.type === "progress");
+      const doneEvent = events.find((event) => event.type === "done");
+
+      assert.equal(progressEvents.length, 1);
+      assert.equal(doneEvent?.record?.result?.candidates?.length, 1);
+    } finally {
+      config.imageGenerationApiKey = originalImageGenerationApiKey;
+      await new Promise<void>((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())));
+    }
+  });
 });

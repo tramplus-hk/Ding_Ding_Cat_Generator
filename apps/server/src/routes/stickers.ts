@@ -323,7 +323,7 @@ stickersRouter.post("/:id/generate", async (req, res, next) => {
     await updateStickerRecord(record.id, { status: "generating" });
     logStickerRouteStep("generate_record_marked_generating", { recordId: record.id });
     const result = await generateSticker(record, {
-      count: 5,
+      count: config.imageGenerationCandidateCount,
       referenceImagePath: input.referenceImagePath,
       referenceImageUrl: input.referenceImageUrl,
       onProgress: (current, total, candidatePath) => {
@@ -373,7 +373,7 @@ stickersRouter.post("/:id/refine", async (req, res, next) => {
     });
     logStickerRouteStep("refine_record_marked_generating", { recordId: record.id });
     const result = await generateSticker(record, {
-      count: 5,
+      count: config.imageGenerationCandidateCount,
       selectedImagePath: input.selectedPath,
       selectedImageUrl: record.result?.candidateUrls?.[input.selectedPath],
       refinementRequirement: input.requirement,

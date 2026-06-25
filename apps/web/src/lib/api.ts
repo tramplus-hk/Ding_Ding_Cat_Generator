@@ -1,6 +1,14 @@
 import type { CreateStickerInput, StickerRecord } from "@sticker-platform/shared";
 
 const apiBaseUrl = import.meta.env.VITE_API_BASE_URL ?? "";
+const streamRecoveryTimeoutMs = 12 * 60 * 1000;
+const streamRecoveryPollMs = 2_000;
+
+class StreamDisconnectedError extends Error {}
+
+function wait(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
 
 async function request<T>(path: string, options?: RequestInit): Promise<T> {
   let response: Response;
@@ -46,6 +54,27 @@ export function getSticker(id: string): Promise<StickerRecord> {
   return request<StickerRecord>(`/api/stickers/${id}`);
 }
 
+async function pollGeneratedSticker(id: string, originalError: unknown): Promise<StickerRecord> {
+  const deadline = Date.now() + streamRecoveryTimeoutMs;
+
+  while (Date.now() < deadline) {
+    const record = await getSticker(id);
+
+    if (record.status === "generated" && record.result?.candidates?.length) {
+      return record;
+    }
+
+    if (record.status === "generating") {
+      await wait(streamRecoveryPollMs);
+      continue;
+    }
+
+    break;
+  }
+
+  throw originalError;
+}
+
 type SSEServerEvent =
   | { type: "progress"; current: number; total: number; candidate: string; preview?: string }
   | { type: "done"; record: StickerRecord }
@@ -87,7 +116,7 @@ async function streamRequest<T>(
       chunk = await reader.read();
     } catch (error) {
       const message = error instanceof Error ? error.message : "Unknown stream read error";
-      throw new Error(`Live generation progress stream disconnected while reading server-sent events from ${apiBaseUrl || "the Vite /api proxy"}. This is a browser-to-backend progress stream error, not proof that the image model failed. original browser stream error: ${message}`);
+      throw new StreamDisconnectedError(`Live generation progress stream disconnected while reading server-sent events from ${apiBaseUrl || "the Vite /api proxy"}. This is a browser-to-backend progress stream error, not proof that the image model failed. original browser stream error: ${message}`);
     }
 
     const { done, value } = chunk;
@@ -122,6 +151,10 @@ export function generateSticker(
     method: "POST",
     body: input ? JSON.stringify(input) : undefined,
   }, onProgress).catch(async (error) => {
+    if (error instanceof StreamDisconnectedError) {
+      return pollGeneratedSticker(id, error);
+    }
+
     const record = await getSticker(id);
 
     if (record.status === "generated" && record.result?.candidates?.length) {
@@ -142,6 +175,10 @@ export function refineSticker(
     { body: JSON.stringify(input), method: "POST" },
     onProgress,
   ).catch(async (error) => {
+    if (error instanceof StreamDisconnectedError) {
+      return pollGeneratedSticker(id, error);
+    }
+
     const record = await getSticker(id);
 
     if (record.status === "generated" && record.result?.candidates?.length) {

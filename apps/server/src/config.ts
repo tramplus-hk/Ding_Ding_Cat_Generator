@@ -29,6 +29,7 @@ export const config = {
   imageGenerationApiUrl:
     firstNonEmpty(process.env.IMAGE_GENERATION_API_URL, process.env.NANO_BANANA_API_URL) || "https://ai-gateway.vercel.sh/v1",
   imageGenerationModel: firstNonEmpty(process.env.IMAGE_GENERATION_MODEL, process.env.NANO_BANANA_MODEL) || "openai/gpt-image-2",
+  imageGenerationCandidateCount: Number(process.env.IMAGE_GENERATION_CANDIDATE_COUNT ?? 1),
   notionToken: process.env.NOTION_TOKEN ?? "",
   notionDatabaseId: process.env.NOTION_DATABASE_ID ?? "",
   blobReadWriteToken: process.env.BLOB_READ_WRITE_TOKEN ?? "",

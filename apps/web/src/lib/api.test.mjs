@@ -16,4 +16,12 @@ describe("streamRequest network errors", () => {
     assert.match(source, /Live generation progress stream disconnected/);
     assert.match(source, /original browser stream error/);
   });
+
+  test("polls the sticker record after a progress stream disconnect", async () => {
+    const source = await readFile(new URL("./api.ts", import.meta.url), "utf8");
+
+    assert.match(source, /pollGeneratedSticker/);
+    assert.match(source, /while \(Date\.now\(\) < deadline\)/);
+    assert.match(source, /record\.status === "generating"/);
+  });
 });

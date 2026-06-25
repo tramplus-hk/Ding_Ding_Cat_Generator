@@ -16,7 +16,7 @@ describe("reference photo upload control", () => {
   test("uses a React-generated id so duplicate upload components do not conflict", async () => {
     const source = await readFile(new URL("./GeneratePage.tsx", import.meta.url), "utf8");
 
-    assert.match(source, /import \{ useId, useRef, useState \} from "react";/);
+    assert.match(source, /import \{[^}]*\buseId\b[^}]*\} from "react";/);
     assert.match(source, /const referencePhotoInputId = useId\(\);/);
     assert.match(source, /htmlFor=\{referencePhotoInputId\}/);
     assert.match(source, /id=\{referencePhotoInputId\}/);
