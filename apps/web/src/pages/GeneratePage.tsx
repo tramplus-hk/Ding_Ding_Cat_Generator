@@ -792,6 +792,18 @@ export function GeneratePage() {
                                 ) : (
                                   <div className="accepted-placeholder">No image</div>
                                 )}
+                                {imgUrl ? (
+                                  <a
+                                    className="card-download-btn"
+                                    href={imgUrl}
+                                    download
+                                    onClick={(e) => e.stopPropagation()}
+                                    title="Download"
+                                    aria-label="Download image"
+                                  >
+                                    Download
+                                  </a>
+                                ) : null}
                               </button>
                             );
                           })}
@@ -836,6 +848,18 @@ export function GeneratePage() {
                         {rec.description.slice(0, 40)}
                         {rec.description.length > 40 ? "…" : ""}
                       </div>
+                      {imgUrl ? (
+                        <a
+                          className="card-download-btn"
+                          href={imgUrl}
+                          download
+                          onClick={(e) => e.stopPropagation()}
+                          title="Download"
+                          aria-label="Download image"
+                        >
+                          Download
+                        </a>
+                      ) : null}
                     </button>
                   );
                 })}

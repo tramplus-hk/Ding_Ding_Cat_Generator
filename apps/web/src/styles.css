@@ -2857,6 +2857,38 @@ body {
   background: #fff;
 }
 
+.card-download-btn {
+  position: absolute;
+  bottom: 10px;
+  right: 10px;
+  display: inline-flex;
+  align-items: center;
+  padding: 6px 12px;
+  border-radius: 999px;
+  background: var(--oliver-forest);
+  color: #fff;
+  font-size: 11px;
+  font-weight: 700;
+  text-decoration: none;
+  opacity: 0;
+  transform: translateY(4px);
+  transition: opacity 0.16s ease, transform 0.16s ease;
+  pointer-events: none;
+  z-index: 3;
+}
+
+.card-download-btn:hover {
+  background: var(--oliver-forest-dark);
+  color: #fff;
+}
+
+.strip-card:hover .card-download-btn,
+.accepted-card:hover .card-download-btn {
+  opacity: 1;
+  transform: translateY(0);
+  pointer-events: auto;
+}
+
 .strip-badge {
   position: absolute;
   top: 10px;
