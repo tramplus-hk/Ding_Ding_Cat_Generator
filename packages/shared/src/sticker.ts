@@ -23,12 +23,15 @@ export const createStickerSchema = z.object({
 export const stickerResultSchema = z.object({
   provider: z.enum(["gpt-image-2", "nano-banana-2", "placeholder"]),
   format: stickerFormatSchema,
+  runId: z.string().optional(),
   localPath: z.string().optional(),
   fileUrl: z.string().optional(),
   selectedPath: z.string().optional(),
   candidates: z.array(z.string()).optional(),
   candidateUrls: z.record(z.string()).optional(),
   candidatePreviews: z.record(z.string()).optional(),
+  candidateErrors: z.record(z.string()).optional(),
+  requestedCandidateCount: z.number().int().positive().optional(),
   refinementRequirement: z.string().optional(),
   notionPageId: z.string().optional(),
 });
