@@ -37,7 +37,7 @@ export const config = {
   geminiApiKey: process.env.GEMINI_API_KEY ?? "",
   geminiModel: process.env.GEMINI_MODEL ?? "models/gemini-2.5-flash-image-preview",
   /** GPT Image 2 via AI Gateway — no base64 refs, sends files as multipart form data. */
-  gptImageModel: process.env.GPT_IMAGE_MODEL ?? "",
+  gptImageModel: process.env.GPT_IMAGE_MODEL || firstNonEmpty(process.env.IMAGE_GENERATION_MODEL, process.env.NANO_BANANA_MODEL) || "openai/gpt-image-2",
   imageGenerationApiKey,
   imageGenerationApiUrl,
   imageGenerationModel: firstNonEmpty(process.env.IMAGE_GENERATION_MODEL, process.env.NANO_BANANA_MODEL) || "openai/gpt-image-2",

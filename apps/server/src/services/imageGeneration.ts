@@ -154,23 +154,33 @@ async function uploadBufferToGemini(buffer: Buffer, mimeType: string, displayNam
 }
 
 /**
+ * Fetch an image from a URL into a Buffer + content type.
+ * Handles Notion presigned S3 URLs (which already have auth in query params)
+ * as well as any other public image URL via a plain GET request.
+ */
+async function fetchImageUrl(url: string): Promise<{ buffer: Buffer; contentType: string } | undefined> {
+  const response = await fetch(url);
+  if (!response.ok) return undefined;
+
+  const contentType = response.headers.get("content-type")?.split(";")[0] ?? "image/png";
+  const buffer = Buffer.from(await response.arrayBuffer());
+  return { buffer, contentType };
+}
+
+/**
  * Upload an image source (local file path or HTTP URL) to Gemini File API.
  */
 async function uploadImageToGemini(source: string): Promise<string | undefined> {
-  let buffer: Buffer;
-  let mimeType: string;
-
   if (source.startsWith("http://") || source.startsWith("https://")) {
-    const response = await fetch(source);
-    if (!response.ok) return undefined;
-    mimeType = response.headers.get("content-type")?.split(";")[0] ?? "image/png";
-    buffer = Buffer.from(await response.arrayBuffer());
-  } else {
-    buffer = await readFile(source);
-    mimeType = mimeTypeFromFilePath(source);
+    const result = await fetchImageUrl(source);
+    if (!result) return undefined;
+    const displayName = path.basename(source.split("?")[0]);
+    return uploadBufferToGemini(result.buffer, result.contentType, displayName);
   }
 
-  const displayName = path.basename(source.split("?")[0]);
+  const buffer = await readFile(source);
+  const mimeType = mimeTypeFromFilePath(source);
+  const displayName = path.basename(source);
   return uploadBufferToGemini(buffer, mimeType, displayName);
 }
 
@@ -247,11 +257,13 @@ async function loadReferenceBuffers(sources: string[]): Promise<ReferenceBuffer[
     sources.map(async (source) => {
       try {
         if (source.startsWith("http://") || source.startsWith("https://")) {
-          const response = await fetch(source);
-          if (!response.ok) return null;
-          const mimeType = response.headers.get("content-type")?.split(";")[0] ?? "image/png";
-          const buffer = Buffer.from(await response.arrayBuffer());
-          return { buffer, filename: path.basename(new URL(source).pathname) || "reference.png", mimeType };
+          const result = await fetchImageUrl(source);
+          if (!result) return null;
+          return {
+            buffer: result.buffer,
+            filename: path.basename(new URL(source).pathname) || "reference.png",
+            mimeType: result.contentType,
+          };
         }
         const buffer = await readFile(source);
         const mimeType = mimeTypeFromFilePath(source);
@@ -265,10 +277,12 @@ async function loadReferenceBuffers(sources: string[]): Promise<ReferenceBuffer[
 }
 
 /**
- * Generate a single sticker candidate using GPT Image 2 via the AI Gateway.
- * Reference images are sent as multipart form-data fields — no base64 encoding.
- *
- * Uses the /v1/images/generations endpoint (not chat completions).
+ * Generate a single sticker candidate using GPT Image 2 via OpenAI's
+ * /v1/images/edits endpoint.
+ * Reference images are sent as multipart form-data fields (image[]) alongside
+ * the text prompt — no base64 encoding. The /v1/images/edits endpoint natively
+ * accepts reference images and generates a variation that preserves the
+ * character while applying the requested scene / pose / emotion.
  */
 async function generateWithGptImage2(
   record: StickerRecord,
@@ -289,51 +303,59 @@ async function generateWithGptImage2(
     `  Images 1–4: Four canonical physical views (front, left, right, back).\n` +
     `  Images 5–9: Five emotion/expression variants.\n` +
     `  Images 10+: Supplemental style references and previously generated stickers.\n\n` +
-    `IMPORTANT: Pay special attention to Image 1 (front view) — look at the golden bell ` +
-    `on the forehead, the "DING DING" text on the chest, and the exact coat pattern. ` +
-    `YOU MUST REPRODUCE THE EXACT CHARACTER FROM THESE IMAGES. Do NOT draw a different cat.\n`;
+    `COPY THE EXACT CHARACTER FROM THESE IMAGES. Do NOT draw a different cat.\n` +
+    `Match the face, body, proportions, colors, markings, and style exactly as shown.\n`;
 
   const prompt = buildGenerationPrompt(record, options, variationIndex);
   const fullPrompt = `${primingText}\n\n${prompt}`;
 
-  // Build multipart form data with all reference images
   const formData = new FormData();
   formData.append("model", config.gptImageModel);
   formData.append("prompt", fullPrompt);
   formData.append("n", "1");
   formData.append("size", "1024x1024");
-  formData.append("response_format", "b64_json");
 
   const allBuffers = [...referenceBuffers, ...extraImageBuffers];
-
-  if (allBuffers.length > 0) {
-    for (const ref of allBuffers) {
-      const blob = new Blob([ref.buffer], { type: ref.mimeType });
-      formData.append("image", blob, ref.filename);
-    }
+  for (const ref of allBuffers) {
+    formData.append(
+      "image[]",
+      new Blob([ref.buffer], { type: ref.mimeType }),
+      ref.filename,
+    );
   }
 
-  const response = await fetch(`${apiUrl.replace(/\/$/, "")}/images/generations`, {
+  // 90-second timeout per candidate to prevent hanging on network issues
+  const controller = new AbortController();
+  const abortTimer = setTimeout(() => controller.abort(), 90_000);
+
+  const response = await fetch(`${apiUrl.replace(/\/$/, "")}/images/edits`, {
     method: "POST",
     headers: {
       Authorization: `Bearer ${apiKey}`,
     },
     body: formData,
-  });
+    signal: controller.signal,
+  }).finally(() => clearTimeout(abortTimer));
 
   if (!response.ok) {
     const text = await response.text().catch(() => "");
     throw new Error(`GPT Image 2 request failed with ${response.status}: ${text.slice(0, 500)}`);
   }
 
-  const data = (await response.json()) as { data?: Array<{ b64_json?: string }> };
-  const b64 = data.data?.[0]?.b64_json;
+  const data = (await response.json()) as { data?: Array<{ b64_json?: string; url?: string }> };
+  const item = data.data?.[0];
+  const b64 = item?.b64_json;
 
-  if (!b64) {
-    throw new Error("GPT Image 2 response did not include b64_json image data");
+  if (b64) {
+    await writeFile(outputPath, Buffer.from(b64, "base64"));
+  } else if (item?.url) {
+    const imgResponse = await fetch(item.url);
+    if (!imgResponse.ok) throw new Error(`Failed to download generated image from ${item.url}`);
+    const imgBuffer = Buffer.from(await imgResponse.arrayBuffer());
+    await writeFile(outputPath, imgBuffer);
+  } else {
+    throw new Error(`GPT Image 2 response did not include image data. Response: ${JSON.stringify(data).slice(0, 300)}`);
   }
-
-  await writeFile(outputPath, Buffer.from(b64, "base64"));
 }
 
 function slugify(value: string): string {
@@ -405,59 +427,25 @@ These reference images are your ONLY authoritative source for the character's ap
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 Head & Face (match Reference Images 1, 5–9):
-  - Round head shape with two triangular ears on top. Ears have inner pink/light coloring (match reference exactly).
-  - Large oval eyes with white catchlights/highlights. Eye shape, size, spacing, iris color, and pupil style must match the references precisely.
-  - Small pink triangular nose centered below the eyes.
-  - Whiskers: 2–3 thin lines on each cheek, matching the reference angle and length.
-  - Mouth: small curved line below the nose. Expression (smile, laugh, angry) must match the requested emotion.
-  - Face shape and feature placement must be pixel-identical in spirit to Image 1 (front.png reference).
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-🔔 GOLDEN BELL — PERMANENT, IMMUTABLE, NON-NEGOTIABLE
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-  This is the #1 most critical feature of Ding Ding Cat. The bell is the character's BRAND IDENTITY MARKER. Without the CORRECT bell, it is NOT Ding Ding Cat. This is an industrial production requirement — zero tolerance for bell variation.
-
-  THE GOLDEN BELL MUST BE AN EXACT COPY OF THE BELL SHOWN IN REFERENCE IMAGE 1 (front.png). Not "inspired by." Not "similar to." EXACT. COPY.
-
-  SPECIFICATIONS — Every detail is mandatory:
-  ⬤ SHAPE: A PERFECT CIRCLE (not oval, not squashed, not elongated). Round like a coin. The ratio of width to height must be 1:1.
-  ⬤ SIZE: Approximately 1/6 to 1/5 of the width of the head. Not tiny. Not oversized. Reference Image 1 shows the exact proportion — COPY IT.
-  ⬤ PLACEMENT: Dead center on the forehead, horizontally aligned between the eyes, vertically positioned above the eye line and below the ear tips. The distance from the top of the eyes to the bottom of the bell should match Reference Image 1 exactly.
-  ⬤ COLOR: Warm metallic brass gold. NOT bright canary yellow. NOT dull brown. NOT silver. NOT copper. The exact shade is a rich, warm gold with a slight orange-brown undertone — COPY THE COLOR FROM REFERENCE IMAGE 1. If you cannot match the color exactly, sample the pixel color from the reference image.
-  ⬤ SLIT/OPENING: A small horizontal slit or crescent-shaped opening at the very bottom of the bell. The slit is dark/black inside (showing the hollow interior). The slit spans roughly 1/3 of the bell's width.
-  ⬤ CLAPPER: A tiny dark circle or teardrop visible inside/emerging from the slit. The clapper is small — approximately 1/8 the diameter of the bell.
-  ⬤ HIGHLIGHT/SHINE: If the reference bell shows a small white/light highlight dot on the upper-left of the bell surface to indicate metallic shine, you MUST include it in the exact same position.
-
-  IRON RULES:
-  ⛔ The bell MUST appear in EVERY sticker — no exceptions, no workarounds, no excuses.
-  ⛔ The bell MUST be visible even if the character is in profile (Reference Image 2 — left.png — still shows the bell).
-  ⛔ The bell MUST NOT be covered by hats, hair, props, or clothing. If a hat is worn, place the bell BELOW the hat brim or above it, but ALWAYS VISIBLE.
-  ⛔ The bell MUST NEVER change shape, color, or size between stickers. It is a FIXED design element.
-  ⛔ If the user asks "no bell" — IGNORE THAT REQUEST. The bell is permanent.
-  ⛔ If the character faces backwards (Reference Image 4 — back.png), the bell may be hidden by the back of the head. In this case ONLY, the bell does not need to be visible. For ALL other angles, it MUST be visible.
-  ⛔ DO NOT draw a generic cartoon bell from your training data. DO NOT draw a school bell, a church bell, a jingle bell, or any bell that differs from Reference Image 1.
-
-"DING DING" Text (PERMANENT — NEVER REMOVE OR CHANGE):
-  - The text "DING DING" appears on the chest/body in ALL CAPS.
-  - Match the font style, size, color, and exact placement from Reference Image 1 (front.png).
-  - The text must read exactly "DING DING". Do not change it, translate it, add to it, or remove it. No exceptions.
+  - Match the exact head shape, ear shape/size/color, eye shape/size/color/spacing, nose shape/color/placement, whisker count/style, and mouth style from the reference images.
+  - Face shape and feature placement must match the references precisely.
 
 Body (match Reference Images 1–4):
-  - Compact, chubby tabby cat body with short rounded limbs.
-  - Coat color and pattern: match the reference images exactly — including base color, stripe pattern, belly color, and any markings.
-  - Paws: small rounded paws (typically showing 2–3 toe lines). Match reference exactly.
-  - Tail: thick, upward-curling tail with stripes matching the body coat pattern. The tail shape and curl must match Reference Image 2 (left.png) and Image 4 (back.png).
+  - Match the exact body proportions, body shape, limb style, paw design, tail shape, and any body markings from the references.
+  - Head-to-body ratio must match the references (chibi/mascot proportions).
 
-Body proportions: the head should be slightly large relative to the body (chibi/cute mascot proportions), matching the exact ratio shown in the references. Do NOT draw realistic cat proportions.
+Markings & Details:
+  - Copy ALL visible markings, symbols, text, and design elements exactly as they appear on the character in the reference images.
+  - Do NOT add, remove, or modify any character markings that are not present in the references.
+  - If a marking appears in multiple reference images, it is permanent — always include it.
+  - If a marking does NOT appear in ANY reference image, do NOT invent it.
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-🔴 STYLE — STRICT 2D FLAT VECTOR
+🔴 STYLE — MATCH THE REFERENCE STYLE
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-  - EXACT STYLE: 2D vector-style flat graphic illustration ONLY.
-  - Clean, crisp geometric outlines with solid flat color fills.
-  - ZERO 3D rendering, ZERO realistic shading, ZERO gradients, ZERO textures, ZERO drop shadows, ZERO lighting effects.
+  - Match the EXACT art style shown in the reference images — flat colors, line weight, shading approach, and level of detail.
+  - ZERO 3D rendering, ZERO photorealistic textures, ZERO gradients unless present in references.
   - Cartoon sticker aesthetic suitable for messaging apps.
   - Simple, clean, instantly readable at small icon size.
   - BACKGROUND RULE: When the user's description does NOT explicitly specify a background colour or setting, you MUST use a solid flat white background of EXACTLY #ffffff — pure white, no off-white, no tint, no shade. Only use a non-#ffffff background when the user's description explicitly describes a specific background colour, scene, or setting.
@@ -468,17 +456,9 @@ Body proportions: the head should be slightly large relative to the body (chibi/
 
   ❌ DO NOT draw a realistic cat or a photorealistic cat.
   ❌ DO NOT draw a generic cartoon cat that looks different from the references.
-  ❌ DO NOT change the character's color, coat pattern, or body shape.
-  ❌ DO NOT use 3D rendering, gradients, realistic lighting, or textures.
-  ❌ DO NOT remove, hide, or alter the golden bell on the forehead.
-  ❌ DO NOT draw a random bell — no different shape, no different color, no different size. The bell must be pixel-identical to Reference Image 1.
-  ❌ DO NOT draw a yellow circle and call it a bell. The bell has a slit, a clapper, and a metallic gold color — not flat yellow.
-  ❌ DO NOT draw the bell as an oval, a diamond, a triangle, or any non-circular shape. PERFECT CIRCLE ONLY.
-  ❌ DO NOT place the bell anywhere other than the exact center of the forehead as shown in Reference Image 1. Not on the chest, not on the cheek, not on the ear.
-  ❌ DO NOT remove, change, or obscure the "DING DING" text.
-  ❌ DO NOT add clothing that covers the "DING DING" text (the text must remain visible).
-  ❌ DO NOT add clothing, hair, or accessories that cover or obscure the golden bell.
-  ❌ DO NOT change the face style — the eye shape, nose, whiskers, and proportions are fixed.
+  ❌ DO NOT change the character's proportions, colors, markings, or body shape.
+  ❌ DO NOT add design elements, symbols, text, or accessories that are NOT present in the reference images.
+  ❌ DO NOT change the face style — the eye shape, nose, whiskers, ear shape, and proportions are fixed by the references.
   ❌ DO NOT draw a different animal (dog, bunny, bear) — this is specifically a CAT mascot.
   ❌ DO NOT copy any trademarked characters (Hello Kitty, Pokemon, Pusheen, etc.).
   ❌ DO NOT make the character look like a human or humanoid.
@@ -487,29 +467,19 @@ Body proportions: the head should be slightly large relative to the body (chibi/
 🔴 EMOTION & POSE GUIDANCE
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-  - The five emotion reference images show: smile (open happy mouth), laugh (eyes curved in joy), holdflag (holding a prop), clothes (wearing outfit), angry (furrowed brows).
+  - The five emotion reference images show different expressions and poses.
   - For this sticker, use the expression that best matches the user's description. Default to friendly/smiling if unspecified.
-  - Pose and props may vary per the user's request, but the character's body shape, face, bell, and text must remain IDENTICAL to the references.
+  - Pose and props may vary per the user's request, but the character's body shape, face, and permanent markings must remain IDENTICAL to the references.
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 🔴 FINAL VERIFICATION — CHECK BEFORE OUTPUT
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-  Before finalizing the image, verify EVERY item below. If ANY check fails, FIX IT before outputting:
+  Before finalizing the image, verify EVERY item below:
 
-  ☑🔔 GOLDEN BELL AUDIT (MOST IMPORTANT — CHECK THIS FIRST):
-     → Open Reference Image 1 (front.png) side by side with your output.
-     → Is the bell a PERFECT CIRCLE? (Not oval, not squashed — width equals height exactly.)
-     → Is the bell the SAME SIZE relative to the head as in Reference Image 1? (Approximately 1/5 of head width.)
-     → Is the bell the EXACT SAME COLOR? (Warm metallic gold with orange-brown undertone. NOT bright yellow. NOT silver.)
-     → Does the bell have a dark HORIZONTAL SLIT at the bottom with a tiny clapper inside?
-     → Is the bell placed at the EXACT CENTER of the forehead, between and above the eyes, as in Reference Image 1?
-     → If ANY of the above is NO → YOUR IMAGE IS REJECTED. Redraw the bell to match Reference Image 1 EXACTLY.
-
-  ☑ "DING DING" text IS present on chest, matching Reference Image 1 in font/size/color/placement.
   ☑ Face IS Ding Ding Cat's face from the references — same eyes, nose, whiskers, ear shape.
-  ☑ Body IS the chubby tabby cat body from the references — same proportions, coat, tail.
-  ☑ Style IS 2D flat vector — NO 3D, NO gradients, NO textures, NO realistic shading.
+  ☑ Body IS the correct body from the references — same proportions, markings, tail.
+  ☑ Style matches the reference images.
   ☑ The character IS recognizably the SAME mascot shown in the reference images.
   ☑ Only outfit, props, pose, and background differ from the baseline references.
 
@@ -557,18 +527,13 @@ async function imagePathToContentPart(absolutePath: string): Promise<OpenAiConte
 
 async function imageUrlToContentPart(url: string): Promise<OpenAiContentPart | undefined> {
   try {
-    const response = await fetch(url);
+    const result = await fetchImageUrl(url);
+    if (!result) return undefined;
 
-    if (!response.ok) {
-      return undefined;
-    }
-
-    const contentType = response.headers.get("content-type")?.split(";")[0] ?? "image/png";
-    const raw = Buffer.from(await response.arrayBuffer());
-
+    const raw = result.buffer;
     return {
       type: "image_url",
-      image_url: { url: `data:${contentType};base64,${raw.toString("base64")}`, detail: "high" },
+      image_url: { url: `data:${result.contentType};base64,${raw.toString("base64")}`, detail: "high" },
     };
   } catch {
     return undefined;
@@ -752,8 +717,9 @@ async function generateWithImageProvider(
 ): Promise<void> {
   const prompt = buildGenerationPrompt(record, options, variationIndex);
 
-  // ── GPT Image 2 path (highest priority — multipart files, no base64) ──
-  if (config.gptImageModel && gptImageRefBuffers && gptImageRefBuffers.length > 0 && config.nanoBananaApiKey) {
+  // ── GPT Image 2 path (highest priority — JSON with base64 images) ──
+  const gptImageKey = config.nanoBananaApiKey || config.imageGenerationApiKey;
+  if (config.gptImageModel && gptImageRefBuffers && gptImageRefBuffers.length > 0 && gptImageKey) {
     await generateWithGptImage2(
       record,
       outputPath,
@@ -761,8 +727,8 @@ async function generateWithImageProvider(
       variationIndex,
       gptImageRefBuffers,
       gptImageExtraBuffers ?? [],
-      config.nanoBananaApiUrl,
-      config.nanoBananaApiKey,
+      config.nanoBananaApiUrl || config.imageGenerationApiUrl,
+      gptImageKey,
     );
     return;
   }
@@ -774,20 +740,10 @@ async function generateWithImageProvider(
     `with a fixed, established design. STUDY EVERY IMAGE WITH EXTREME CARE.\n\n` +
     `The reference images show:\n` +
     `  Images 1–4: Four canonical physical views (front, left, right, back) — these define the ` +
-    `character's EXACT proportions, coat pattern, facial features, golden bell, and "DING DING" text.\n` +
+    `character's EXACT proportions, facial features, markings, and body design.\n` +
     `  Images 5–9: Five emotion/expression variants (smile, laugh, holdflag, clothes, angry) — ` +
     `these show the character's face and body in different expressions/outfits.\n` +
     `  Images 10+: Supplemental style references and previously generated stickers.\n\n` +
-    `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
-    `🔔 CRITICAL: THE GOLDEN BELL — STUDY THIS FIRST\n` +
-    `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
-    `Before you draw ANYTHING, locate Reference Image 1 (front.png). STARE at the gold bell on ` +
-    `the forehead. Burn it into your memory. This is the SINGLE MOST CRITICAL feature of Ding Ding Cat.\n\n` +
-    `The bell you see in Reference Image 1 is THE ONLY CORRECT BELL. Every sticker you generate ` +
-    `MUST have this EXACT SAME bell. Not a similar bell. Not a yellow circle. Not a brass pendant. ` +
-    `Not a bell you remember from other cartoon cats. THE EXACT BELL FROM REFERENCE IMAGE 1.\n\n` +
-    `Check Reference Images 5–9 as well — the SAME bell appears in every one of them. If the bell ` +
-    `looks different in your output than it does in EVERY reference image, YOU HAVE FAILED.\n\n` +
     `YOU MUST REPRODUCE THE EXACT CHARACTER FROM THESE IMAGES. Do NOT draw a different cat. ` +
     `Do NOT invent a different face, different colors, or different proportions. The reference ` +
     `images are your ONLY truth for what Ding Ding Cat looks like. After studying all images ` +
@@ -802,8 +758,13 @@ async function generateWithImageProvider(
   }
 
   // ── AI Gateway fallback (base64 inline) ──
-  if (!config.nanoBananaApiKey) {
-    throw new Error("Neither GEMINI_API_KEY nor NANO_BANANA_API_KEY is configured");
+  const fallbackKey = config.nanoBananaApiKey || config.imageGenerationApiKey;
+  const fallbackUrl = config.nanoBananaApiUrl || config.imageGenerationApiUrl;
+  const fallbackModel = config.nanoBananaApiKey
+    ? config.nanoBananaModel
+    : config.imageGenerationModel;
+  if (!fallbackKey) {
+    throw new Error("Neither GEMINI_API_KEY nor NANO_BANANA_API_KEY nor OPENAI_API_KEY is configured");
   }
 
   const primingInstruction: OpenAiContentPart = {
@@ -822,14 +783,14 @@ async function generateWithImageProvider(
     { type: "text", text: prompt },
   ];
 
-  const response = await fetch(`${config.nanoBananaApiUrl.replace(/\/$/, "")}/chat/completions`, {
+  const response = await fetch(`${fallbackUrl.replace(/\/$/, "")}/chat/completions`, {
     method: "POST",
     headers: {
-      Authorization: `Bearer ${config.nanoBananaApiKey}`,
+      Authorization: `Bearer ${fallbackKey}`,
       "Content-Type": "application/json",
     },
     body: JSON.stringify({
-      model: config.nanoBananaModel,
+      model: fallbackModel,
       messages: [{ role: "user", content }],
       modalities: ["image"],
       n: 1,
@@ -895,7 +856,7 @@ export async function generateSticker(record: StickerRecord, options: GenerateOp
     allGeminiFileUris = await uploadImagesToGemini(allSources);
   }
 
-  const isLive = Boolean(config.gptImageModel || config.geminiApiKey || config.nanoBananaApiKey);
+  const isLive = Boolean(config.gptImageModel || config.geminiApiKey || config.nanoBananaApiKey || config.imageGenerationApiKey);
   const candidateUrls: Record<string, string> = {};
   let completedCount = 0;
   const settled: Array<{ index: number; candidatePath: string }> = [];

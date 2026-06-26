@@ -1,7 +1,7 @@
 import type { CreateStickerInput, StickerRecord } from "@sticker-platform/shared";
 
 const apiBaseUrl = import.meta.env.VITE_API_BASE_URL ?? "";
-const streamRecoveryTimeoutMs = 12 * 60 * 1000;
+const streamRecoveryTimeoutMs = 20 * 60 * 1000;
 const streamRecoveryPollMs = 2_000;
 
 function wait(ms: number): Promise<void> {
