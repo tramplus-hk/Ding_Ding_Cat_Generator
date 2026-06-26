@@ -19,6 +19,10 @@ export const config = {
   nanoBananaApiKey: process.env.NANO_BANANA_API_KEY ?? process.env.AI_GATEWAY_API_KEY ?? "",
   nanoBananaApiUrl: process.env.NANO_BANANA_API_URL ?? "https://ai-gateway.vercel.sh/v1",
   nanoBananaModel: process.env.NANO_BANANA_MODEL ?? "google/gemini-3.1-flash-image-preview",
+  geminiApiKey: process.env.GEMINI_API_KEY ?? "",
+  geminiModel: process.env.GEMINI_MODEL ?? "models/gemini-2.5-flash-image-preview",
+  /** GPT Image 2 via AI Gateway — no base64 refs, sends files as multipart form data. */
+  gptImageModel: process.env.GPT_IMAGE_MODEL ?? "",
   notionToken: process.env.NOTION_TOKEN ?? "",
   notionDatabaseId: process.env.NOTION_DATABASE_ID ?? "",
   blobReadWriteToken: process.env.BLOB_READ_WRITE_TOKEN ?? "",

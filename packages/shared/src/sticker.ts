@@ -30,6 +30,8 @@ export const stickerResultSchema = z.object({
   candidateUrls: z.record(z.string()).optional(),
   candidatePreviews: z.record(z.string()).optional(),
   refinementRequirement: z.string().optional(),
+  referenceImages: z.array(z.string()).optional(),
+  prompt: z.string().optional(),
   notionPageId: z.string().optional(),
 });
 
