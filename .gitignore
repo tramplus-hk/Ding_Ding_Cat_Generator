@@ -8,3 +8,4 @@ apps/server/data/
 *.log
 *.tsbuildinfo
 .vercel
+.env*

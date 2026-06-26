@@ -3,7 +3,6 @@ import { readdir } from "node:fs/promises";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import path from "node:path";
-import { setTimeout as delay } from "node:timers/promises";
 import { describe, test } from "node:test";
 import { fileURLToPath } from "node:url";
 import app from "../app.js";
@@ -110,7 +109,7 @@ describe("POST /api/stickers/upload-reference", () => {
 });
 
 describe("POST /api/stickers/:id/generate", () => {
-  test("returns a generating record immediately while background generation continues", async () => {
+  test("returns the generated record after generation completes", async () => {
     const originalImageGenerationApiKey = config.imageGenerationApiKey;
     const originalImageGenerationCandidateCount = config.imageGenerationCandidateCount;
     config.imageGenerationApiKey = "";
@@ -133,29 +132,16 @@ describe("POST /api/stickers/:id/generate", () => {
       assert.equal(createResponse.status, 201);
       const record = (await createResponse.json()) as { id: string };
 
-      const startedAt = Date.now();
       const generateResponse = await fetch(`${baseUrl}/api/stickers/${record.id}/generate`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
       });
 
-      assert.equal(generateResponse.status, 202);
+      assert.equal(generateResponse.status, 200);
       assert.match(generateResponse.headers.get("content-type") ?? "", /application\/json/);
-      const generatingRecord = (await generateResponse.json()) as { status: string; result?: unknown };
-      assert.equal(generatingRecord.status, "generating");
-      assert.equal(generatingRecord.result, undefined);
-      assert.ok(Date.now() - startedAt < 1_000);
-
-      let generatedRecord: { status: string; result?: { candidates?: string[] } } | undefined;
-      for (let i = 0; i < 20; i += 1) {
-        const pollResponse = await fetch(`${baseUrl}/api/stickers/${record.id}`);
-        generatedRecord = (await pollResponse.json()) as { status: string; result?: { candidates?: string[] } };
-        if (generatedRecord.status === "generated") break;
-        await delay(25);
-      }
-
-      assert.equal(generatedRecord?.status, "generated");
-      assert.equal(generatedRecord?.result?.candidates?.length, 5);
+      const generatedRecord = (await generateResponse.json()) as { status: string; result?: { candidates?: string[] } };
+      assert.equal(generatedRecord.status, "generated");
+      assert.equal(generatedRecord.result?.candidates?.length, 5);
     } finally {
       config.imageGenerationApiKey = originalImageGenerationApiKey;
       config.imageGenerationCandidateCount = originalImageGenerationCandidateCount;
@@ -163,7 +149,7 @@ describe("POST /api/stickers/:id/generate", () => {
     }
   });
 
-  test("starts five-candidate generation and exposes the result through polling", async () => {
+  test("generates five candidates without exposing candidate previews", async () => {
     const originalImageGenerationApiKey = config.imageGenerationApiKey;
     const originalImageGenerationCandidateCount = config.imageGenerationCandidateCount;
     config.imageGenerationApiKey = "";
@@ -189,21 +175,12 @@ describe("POST /api/stickers/:id/generate", () => {
         method: "POST",
         headers: { "Content-Type": "application/json" },
       });
-      assert.equal(generateResponse.status, 202);
-      const started = (await generateResponse.json()) as { status: string };
-      assert.equal(started.status, "generating");
+      assert.equal(generateResponse.status, 200);
+      const generatedRecord = (await generateResponse.json()) as { status: string; result?: { candidates?: string[]; candidatePreviews?: Record<string, string> } };
 
-      let generatedRecord: { status: string; result?: { candidates?: string[]; candidatePreviews?: Record<string, string> } } | undefined;
-      for (let i = 0; i < 20; i += 1) {
-        const pollResponse = await fetch(`${baseUrl}/api/stickers/${record.id}`);
-        generatedRecord = (await pollResponse.json()) as { status: string; result?: { candidates?: string[]; candidatePreviews?: Record<string, string> } };
-        if (generatedRecord.status === "generated") break;
-        await delay(25);
-      }
-
-      assert.equal(generatedRecord?.status, "generated");
-      assert.equal(generatedRecord?.result?.candidates?.length, 5);
-      assert.equal(generatedRecord?.result?.candidatePreviews, undefined);
+      assert.equal(generatedRecord.status, "generated");
+      assert.equal(generatedRecord.result?.candidates?.length, 5);
+      assert.equal(generatedRecord.result?.candidatePreviews, undefined);
     } finally {
       config.imageGenerationApiKey = originalImageGenerationApiKey;
       config.imageGenerationCandidateCount = originalImageGenerationCandidateCount;
@@ -239,18 +216,11 @@ describe("POST /api/stickers/:id/generate", () => {
         headers: { "Content-Type": "application/json" },
       });
 
-      assert.equal(generateResponse.status, 202);
+      assert.equal(generateResponse.status, 200);
+      const generatedRecord = (await generateResponse.json()) as { status: string; result?: { candidates?: string[] } };
 
-      let generatedRecord: { status: string; result?: { candidates?: string[] } } | undefined;
-      for (let i = 0; i < 20; i += 1) {
-        const pollResponse = await fetch(`${baseUrl}/api/stickers/${record.id}`);
-        generatedRecord = (await pollResponse.json()) as { status: string; result?: { candidates?: string[] } };
-        if (generatedRecord.status === "generated") break;
-        await delay(25);
-      }
-
-      assert.equal(generatedRecord?.status, "generated");
-      const selectedPath = generatedRecord?.result?.candidates?.[0];
+      assert.equal(generatedRecord.status, "generated");
+      const selectedPath = generatedRecord.result?.candidates?.[0];
       assert.ok(selectedPath);
 
       const refineResponse = await fetch(`${baseUrl}/api/stickers/${record.id}/refine`, {
@@ -261,22 +231,12 @@ describe("POST /api/stickers/:id/generate", () => {
           requirement: "make it extra polished",
         }),
       });
-      assert.equal(refineResponse.status, 202);
+      assert.equal(refineResponse.status, 200);
       assert.match(refineResponse.headers.get("content-type") ?? "", /application\/json/);
-      const started = (await refineResponse.json()) as { status: string; result?: { selectedPath?: string } };
-      assert.equal(started.status, "generating");
-      assert.equal(started.result?.selectedPath, selectedPath);
+      const refinedRecord = (await refineResponse.json()) as { status: string; result?: { candidates?: string[]; selectedPath?: string } };
 
-      let refinedRecord: { status: string; result?: { candidates?: string[]; selectedPath?: string } } | undefined;
-      for (let i = 0; i < 20; i += 1) {
-        const pollResponse = await fetch(`${baseUrl}/api/stickers/${record.id}`);
-        refinedRecord = (await pollResponse.json()) as { status: string; result?: { candidates?: string[]; selectedPath?: string } };
-        if (refinedRecord.status === "generated") break;
-        await delay(25);
-      }
-
-      assert.equal(refinedRecord?.status, "generated");
-      assert.equal(refinedRecord?.result?.candidates?.length, 5);
+      assert.equal(refinedRecord.status, "generated");
+      assert.equal(refinedRecord.result?.candidates?.length, 5);
     } finally {
       config.imageGenerationApiKey = originalImageGenerationApiKey;
       config.imageGenerationCandidateCount = originalImageGenerationCandidateCount;

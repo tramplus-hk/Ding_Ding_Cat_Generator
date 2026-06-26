@@ -39,11 +39,11 @@ function getErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-function startBackgroundGeneration(
+async function runGeneration(
   record: StickerRecord,
   options: Parameters<typeof generateSticker>[1],
   mode: "generate" | "refine",
-): void {
+): Promise<StickerRecord> {
   logStickerRouteStep("background_generation_started", {
     recordId: record.id,
     mode,
@@ -51,29 +51,29 @@ function startBackgroundGeneration(
     refinement: Boolean(options?.refinementRequirement),
   });
 
-  void (async () => {
-    try {
-      const result = await generateSticker(record, options);
-      await updateStickerRecord(record.id, {
-        status: "generated",
-        result,
-        error: undefined,
-      });
-      logStickerRouteStep("background_generation_completed", {
-        recordId: record.id,
-        mode,
-        candidates: result.candidates?.length ?? 0,
-      });
-    } catch (error) {
-      logStickerRouteError("background_generation_failed", error, { recordId: record.id, mode });
-      await updateStickerRecord(record.id, {
-        status: "failed",
-        error: getErrorMessage(error),
-      }).catch((updateError) => {
-        logStickerRouteError("background_generation_status_update_failed", updateError, { recordId: record.id, mode });
-      });
-    }
-  })();
+  try {
+    const result = await generateSticker(record, options);
+    const generatedRecord = await updateStickerRecord(record.id, {
+      status: "generated",
+      result,
+      error: undefined,
+    });
+    logStickerRouteStep("background_generation_completed", {
+      recordId: record.id,
+      mode,
+      candidates: result.candidates?.length ?? 0,
+    });
+    return generatedRecord;
+  } catch (error) {
+    logStickerRouteError("background_generation_failed", error, { recordId: record.id, mode });
+    await updateStickerRecord(record.id, {
+      status: "failed",
+      error: getErrorMessage(error),
+    }).catch((updateError) => {
+      logStickerRouteError("background_generation_status_update_failed", updateError, { recordId: record.id, mode });
+    });
+    throw error;
+  }
 }
 
 export const stickersRouter = Router();
@@ -327,15 +327,15 @@ stickersRouter.post("/:id/generate", async (req, res, next) => {
     const routeStartedAt = Date.now();
     logStickerRouteStep("generate_request_accepted", { recordId: record.id, theme: record.theme });
     await deleteStickerRuntimeAssets(record.id);
-    const generatingRecord = await updateStickerRecord(record.id, { status: "generating", error: undefined, result: undefined });
+    await updateStickerRecord(record.id, { status: "generating", error: undefined, result: undefined });
     logStickerRouteStep("generate_record_marked_generating", { recordId: record.id });
-    startBackgroundGeneration(record, {
+    const generatedRecord = await runGeneration(record, {
       count: config.imageGenerationCandidateCount,
       referenceImagePath: input.referenceImagePath,
       referenceImageUrl: input.referenceImageUrl,
     }, "generate");
-    logStickerRouteStep("generate_start_response_sent", { recordId: record.id, elapsedMs: Date.now() - routeStartedAt });
-    res.status(202).json(generatingRecord);
+    logStickerRouteStep("generate_response_sent", { recordId: record.id, elapsedMs: Date.now() - routeStartedAt });
+    res.json(withoutCandidatePreviews(generatedRecord));
   } catch (error) {
     logStickerRouteError("generate_failed", error, { recordId: req.params.id });
     next(error);
@@ -356,13 +356,13 @@ stickersRouter.post("/:id/refine", async (req, res, next) => {
 
     const routeStartedAt = Date.now();
     logStickerRouteStep("refine_request_accepted", { recordId: record.id });
-    const generatingRecord = await updateStickerRecord(record.id, {
+    await updateStickerRecord(record.id, {
       status: "generating",
       error: undefined,
       result: record.result ? { ...record.result, selectedPath: input.selectedPath } : undefined,
     });
     logStickerRouteStep("refine_record_marked_generating", { recordId: record.id });
-    startBackgroundGeneration(record, {
+    const generatedRecord = await runGeneration(record, {
       count: config.imageGenerationCandidateCount,
       selectedImagePath: input.selectedPath,
       selectedImageUrl: record.result?.candidateUrls?.[input.selectedPath],
@@ -370,8 +370,8 @@ stickersRouter.post("/:id/refine", async (req, res, next) => {
       referenceImagePath: input.referenceImagePath,
       referenceImageUrl: input.referenceImageUrl,
     }, "refine");
-    logStickerRouteStep("refine_start_response_sent", { recordId: record.id, elapsedMs: Date.now() - routeStartedAt });
-    res.status(202).json(generatingRecord);
+    logStickerRouteStep("refine_response_sent", { recordId: record.id, elapsedMs: Date.now() - routeStartedAt });
+    res.json(withoutCandidatePreviews(generatedRecord));
   } catch (error) {
     logStickerRouteError("refine_failed", error, { recordId: req.params.id });
     next(error);

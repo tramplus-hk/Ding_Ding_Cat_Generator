@@ -424,7 +424,8 @@ async function generateWithImageProvider(
       ? await requestImageEdit(prompt, referenceImages)
       : await requestImageGeneration(prompt);
   } catch (error) {
-    const providerError = new Error(describeImageProviderError(error, record, variationIndex), { cause: error });
+    const providerError = new Error(describeImageProviderError(error, record, variationIndex));
+    Object.assign(providerError, { cause: error });
     logGenerationError("model_request_failed", providerError, {
       recordId: record.id,
       candidate: variationIndex,
@@ -480,7 +481,8 @@ async function requestImageEdit(prompt: string, referenceImages: ReferenceImage[
   formData.append("output_format", "png");
 
   for (const reference of referenceImages) {
-    formData.append("image[]", new Blob([reference.body], { type: reference.mimeType }), reference.fileName);
+    const imageBody = Uint8Array.from(reference.body).buffer;
+    formData.append("image[]", new Blob([imageBody], { type: reference.mimeType }), reference.fileName);
   }
 
   const previousEdit = imageEditQueue;
