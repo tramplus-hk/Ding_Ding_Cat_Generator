@@ -1685,7 +1685,6 @@ body {
 }
 
 .oliver-grid {
-  align-items: start;
   display: grid;
   gap: 30px;
   grid-template-columns: minmax(0, 1.15fr) minmax(320px, 0.85fr);
@@ -2345,6 +2344,8 @@ body {
   border: 1px solid rgba(22,63,49,0.08);
   border-radius: var(--oliver-radius);
   box-shadow: var(--oliver-shadow);
+  display: flex;
+  flex-direction: column;
   overflow: hidden;
   padding: 24px 22px 20px;
 }
@@ -2470,12 +2471,18 @@ body {
   font-size: 12px;
   line-height: 1.4;
   background: rgba(255,255,255,0.5);
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
 
 .thumb-grid {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 14px;
+  flex: 1;
+  align-content: start;
 }
 
 .thumb {
