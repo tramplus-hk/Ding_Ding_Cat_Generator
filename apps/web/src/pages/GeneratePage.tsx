@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { StickerRecord } from "@sticker-platform/shared";
-import { acceptSticker, createSticker, generateSticker, listAllStickers, refineSticker, rejectSticker, uploadReferenceImage } from "../lib/api";
+import { acceptSticker, createSticker, generateSticker, listGallery, refineSticker, rejectSticker, removeGalleryItem, uploadReferenceImage } from "../lib/api";
+import type { GalleryItem } from "../lib/api";
 
 export const FESTIVALS = [
   { id: "general", label: "General", desc: "general TramPlus sticker with Hong Kong tram culture, city motion, and clean brand energy",
@@ -153,21 +154,18 @@ export function GeneratePage() {
   const photoInputRef = useRef<HTMLInputElement>(null);
   const stripRefs = useRef<Record<string, HTMLDivElement | null>>({});
 
-  const [acceptedRecords, setAcceptedRecords] = useState<StickerRecord[]>([]);
+  const [acceptedRecords, setAcceptedRecords] = useState<GalleryItem[]>([]);
   const [galleryLoading, setGalleryLoading] = useState(false);
   const [galleryError, setGalleryError] = useState<string | null>(null);
   const [activeThemeTab, setActiveThemeTab] = useState("all");
-  const [galleryLightbox, setGalleryLightbox] = useState<string | null>(null);
+  const [galleryLightbox, setGalleryLightbox] = useState<GalleryItem | null>(null);
 
   const galleryThemes = ["all", ...FESTIVALS.map((f) => f.id)];
-  const recentAccepted = acceptedRecords.slice(0, 10);
 
-  const groupedByTheme: Record<string, StickerRecord[]> = {};
+  const groupedByTheme: Record<string, GalleryItem[]> = {};
   for (const r of acceptedRecords) {
-    if (r.status === "accepted" || r.status === "uploaded") {
-      if (!groupedByTheme[r.theme]) groupedByTheme[r.theme] = [];
-      groupedByTheme[r.theme].push(r);
-    }
+    if (!groupedByTheme[r.theme]) groupedByTheme[r.theme] = [];
+    groupedByTheme[r.theme].push(r);
   }
 
   const themeRows = FESTIVALS.filter((f) => groupedByTheme[f.id] && groupedByTheme[f.id].length > 0);
@@ -177,10 +175,10 @@ export function GeneratePage() {
       ? acceptedRecords
       : acceptedRecords.filter((r) => r.theme === activeThemeTab);
 
-  function getGalleryImageUrl(rec: StickerRecord): string | null {
-    const p = rec.result?.fileUrl || rec.result?.localPath || rec.result?.selectedPath;
-    if (!p) return null;
-    return getGeneratedAssetUrl(p);
+  function getGalleryImageUrl(rec: GalleryItem): string | null {
+    if (rec.imageUrl) return rec.imageUrl;
+    if (!rec.localPath) return null;
+    return getGeneratedAssetUrl(rec.localPath);
   }
 
   function getGalleryThemeLabel(themeId: string): string {
@@ -188,12 +186,43 @@ export function GeneratePage() {
     return f?.label ?? themeId;
   }
 
+  function handleDownload(url: string, filename: string) {
+    if (url.startsWith("data:")) {
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      return;
+    }
+    const apiBase = import.meta.env.VITE_API_BASE_URL ?? "";
+    const proxyUrl = `${apiBase}/api/stickers/gallery/download?url=${encodeURIComponent(url)}&filename=${encodeURIComponent(filename)}`;
+    const a = document.createElement("a");
+    a.href = proxyUrl;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+  }
+
+  async function handleDeleteGalleryItem(item: GalleryItem) {
+    if (!item.localPath) return;
+    try {
+      await removeGalleryItem(item.localPath);
+      setAcceptedRecords((prev) => prev.filter((r) => r.id !== item.id));
+    } catch {
+      setAcceptedRecords((prev) => prev.filter((r) => r.id !== item.id));
+    }
+    setGalleryLightbox(null);
+  }
+
   async function loadGallery() {
     try {
       setGalleryLoading(true);
       setGalleryError(null);
-      const all = await listAllStickers();
-      setAcceptedRecords(all.filter((r) => r.status === "accepted" || r.status === "uploaded"));
+      const items = await listGallery();
+      setAcceptedRecords(items);
     } catch (e) {
       setGalleryError(e instanceof Error ? e.message : "Failed to load accepted stickers");
     } finally {
@@ -656,6 +685,7 @@ export function GeneratePage() {
         </section>
 
         <aside className="history-card">
+          <span className="eyebrow">History</span>
           <div className="history-head">
             <div>
               <h2>Recent Ding Ding Cat generations</h2>
@@ -793,16 +823,15 @@ export function GeneratePage() {
                                   <div className="accepted-placeholder">No image</div>
                                 )}
                                 {imgUrl ? (
-                                  <a
+                                  <button
                                     className="card-download-btn"
-                                    href={imgUrl}
-                                    download
-                                    onClick={(e) => e.stopPropagation()}
+                                    type="button"
+                                    onClick={(e) => { e.stopPropagation(); handleDownload(imgUrl, rec.description + ".png"); }}
                                     title="Download"
                                     aria-label="Download image"
                                   >
                                     Download
-                                  </a>
+                                  </button>
                                 ) : null}
                               </button>
                             );
@@ -836,7 +865,7 @@ export function GeneratePage() {
                       key={rec.id}
                       className="accepted-card"
                       type="button"
-                      onClick={() => imgUrl && setGalleryLightbox(imgUrl)}
+                      onClick={() => setGalleryLightbox(rec)}
                       aria-label={`View ${rec.description}`}
                     >
                       {imgUrl ? (
@@ -849,16 +878,15 @@ export function GeneratePage() {
                         {rec.description.length > 40 ? "…" : ""}
                       </div>
                       {imgUrl ? (
-                        <a
+                        <button
                           className="card-download-btn"
-                          href={imgUrl}
-                          download
-                          onClick={(e) => e.stopPropagation()}
+                          type="button"
+                          onClick={(e) => { e.stopPropagation(); handleDownload(imgUrl, rec.description + ".png"); }}
                           title="Download"
                           aria-label="Download image"
                         >
                           Download
-                        </a>
+                        </button>
                       ) : null}
                     </button>
                   );
@@ -874,7 +902,9 @@ export function GeneratePage() {
       {lightboxImage ? (
         <div className="lightbox-overlay" onClick={() => setLightboxImage(null)}>
           <button className="lightbox-close" onClick={() => setLightboxImage(null)} aria-label="Close lightbox">X</button>
-          <a className="lightbox-download" href={lightboxImage} download onClick={(e) => e.stopPropagation()}>Download</a>
+          <div className="lightbox-actions">
+            <button className="lightbox-download" type="button" onClick={() => lightboxImage && handleDownload(lightboxImage, "sticker.png")}>Download</button>
+          </div>
           <img className="lightbox-image" src={lightboxImage} alt="Enlarged sticker" onClick={(e) => e.stopPropagation()} />
         </div>
       ) : null}
@@ -882,8 +912,13 @@ export function GeneratePage() {
       {galleryLightbox ? (
         <div className="lightbox-overlay" onClick={() => setGalleryLightbox(null)}>
           <button className="lightbox-close" onClick={() => setGalleryLightbox(null)} aria-label="Close lightbox">X</button>
-          <a className="lightbox-download" href={galleryLightbox} download onClick={(e) => e.stopPropagation()}>Download</a>
-          <img className="lightbox-image" src={galleryLightbox} alt="Enlarged sticker" onClick={(e) => e.stopPropagation()} />
+          <div className="lightbox-actions">
+            <button className="lightbox-download" type="button" onClick={() => galleryLightbox.imageUrl && handleDownload(galleryLightbox.imageUrl, galleryLightbox.description + ".png")}>Download</button>
+            <button className="lightbox-delete" type="button" onClick={() => handleDeleteGalleryItem(galleryLightbox)}>Delete</button>
+          </div>
+          {galleryLightbox.imageUrl ? (
+            <img className="lightbox-image" src={galleryLightbox.imageUrl} alt={galleryLightbox.description} onClick={(e) => e.stopPropagation()} />
+          ) : null}
         </div>
       ) : null}
 

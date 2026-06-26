@@ -1,5 +1,6 @@
 import type { StickerRecord } from "@sticker-platform/shared";
 import { readFile, stat } from "node:fs/promises";
+import https from "node:https";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { config } from "../config.js";
@@ -157,22 +158,72 @@ async function notionRequest<T>(pathName: string, init: RequestInit = {}, versio
     throw new Error("NOTION_TOKEN is not configured");
   }
 
-  const response = await fetch(`https://api.notion.com/v1${pathName}`, {
-    ...init,
-    headers: {
-      Authorization: `Bearer ${config.notionToken}`,
-      "Notion-Version": version,
-      ...(init.body instanceof FormData ? {} : { "Content-Type": "application/json" }),
-      ...init.headers,
-    },
-  });
+  const maxRetries = 3;
+  let lastError: Error | undefined;
 
-  if (!response.ok) {
-    const body = await response.text();
-    throw new Error(`Notion request failed with ${response.status}: ${body.slice(0, 500)}`);
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    try {
+      const url = new URL(`https://api.notion.com/v1${pathName}`);
+      const method = init.method ?? "GET";
+      const headers: Record<string, string> = {
+        Authorization: `Bearer ${config.notionToken}`,
+        "Notion-Version": version,
+      };
+
+      if (!(init.body instanceof FormData)) {
+        headers["Content-Type"] = "application/json";
+      }
+
+      if (init.headers) {
+        const h = init.headers as Record<string, string>;
+        for (const key of Object.keys(h)) {
+          headers[key] = h[key];
+        }
+      }
+
+      let bodyStr: string | undefined;
+      if (typeof init.body === "string") {
+        bodyStr = init.body;
+      }
+
+      const result = await new Promise<{ status: number; data: string }>((resolve, reject) => {
+        const options: https.RequestOptions = {
+          hostname: url.hostname,
+          path: url.pathname + url.search,
+          method,
+          headers,
+          timeout: 15000,
+        };
+
+        const req = https.request(options, (res) => {
+          let data = "";
+          res.on("data", (chunk: Buffer) => { data += chunk.toString(); });
+          res.on("end", () => resolve({ status: res.statusCode ?? 500, data }));
+        });
+
+        req.on("error", (err) => reject(err));
+        req.on("timeout", () => { req.destroy(); reject(new Error("Request timeout")); });
+
+        if (bodyStr) {
+          req.write(bodyStr);
+        }
+        req.end();
+      });
+
+      if (result.status < 200 || result.status >= 300) {
+        throw new Error(`Notion request failed with ${result.status}: ${result.data.slice(0, 500)}`);
+      }
+
+      return JSON.parse(result.data) as T;
+    } catch (error) {
+      lastError = error instanceof Error ? error : new Error(String(error));
+      if (attempt < maxRetries) {
+        await new Promise((r) => setTimeout(r, 500 * attempt));
+      }
+    }
   }
 
-  return (await response.json()) as T;
+  throw lastError;
 }
 
 async function tryGetDatabase(databaseId: string): Promise<NotionDatabaseResponse | undefined> {
@@ -334,7 +385,7 @@ async function findDataFilePage(databaseId: string, relativePath: string): Promi
   return response.results?.[0]?.id;
 }
 
-function getRichTextProperty(page: NotionPageResult, propertyName: string): string | undefined {
+export function getRichTextProperty(page: NotionPageResult, propertyName: string): string | undefined {
   const property = page.properties?.[propertyName] as { rich_text?: Array<{ plain_text?: string }> } | undefined;
 
   return property?.rich_text?.[0]?.plain_text;
@@ -346,7 +397,7 @@ function getTitleProperty(page: NotionPageResult, propertyName: string): string 
   return property?.title?.[0]?.plain_text;
 }
 
-function getFilePropertyUrl(page: NotionPageResult, propertyName: string): string | undefined {
+export function getFilePropertyUrl(page: NotionPageResult, propertyName: string): string | undefined {
   const property = page.properties?.[propertyName] as NotionFileProperty | undefined;
   const file = property?.files?.[0];
 
@@ -393,6 +444,13 @@ async function archivePageChildren(pageId: string): Promise<void> {
 
     cursor = response.next_cursor;
   }
+}
+
+export async function archiveNotionPage(pageId: string): Promise<void> {
+  await notionRequest(`/pages/${pageId}`, {
+    method: "PATCH",
+    body: JSON.stringify({ archived: true }),
+  });
 }
 
 async function uploadFileToNotion(file: DataFolderFile): Promise<string> {

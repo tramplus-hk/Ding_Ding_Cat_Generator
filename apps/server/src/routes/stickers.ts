@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url";
 import { z } from "zod";
 import { config } from "../config.js";
 import { generateSticker } from "../services/nanoBanana.js";
-import { getAvailableNotionContentName, uploadAcceptedStickerRecord, uploadRejectedStickerRun } from "../services/notion.js";
+import { archiveNotionPage, getAvailableNotionContentName, getFilePropertyUrl, getRichTextProperty, listDataFolderRows, uploadAcceptedStickerRecord, uploadRejectedStickerRun } from "../services/notion.js";
 import {
   createStickerRecord,
   deleteStickerCache,
@@ -217,6 +217,99 @@ stickersRouter.get("/:id/preview/:index", async (req, res, next) => {
     res.set("Content-Type", getMimeType(candidatePath));
     res.set("Cache-Control", "public, max-age=300");
     res.send(Buffer.from(raw));
+  } catch (error) {
+    next(error);
+  }
+});
+
+stickersRouter.get("/gallery", async (_req, res, next) => {
+  try {
+    const historyRecords = await listStickerRecords();
+    const generatedPages = await listDataFolderRows("generated");
+
+    const fileUrlByKey = new Map<string, string>();
+    for (const page of generatedPages) {
+      const fileUrl = getFilePropertyUrl(page, "File");
+      const relativePath = getRichTextProperty(page, "Relative Path");
+      const category = getRichTextProperty(page, "Category");
+      const content = getRichTextProperty(page, "Content");
+      if (fileUrl && relativePath) {
+        fileUrlByKey.set(relativePath, fileUrl);
+        const withoutExt = relativePath.replace(/\.[a-zA-Z0-9]+$/, "");
+        fileUrlByKey.set(withoutExt, fileUrl);
+      }
+      if (fileUrl && category && content) {
+        const key = `${category}/${content}`.replace(/\.[a-zA-Z0-9]+$/, "");
+        fileUrlByKey.set(key, fileUrl);
+      }
+    }
+
+    const galleryItems = historyRecords
+      .filter((r) => r.status === "generated" || r.status === "accepted" || r.status === "uploaded" || r.status === "uploading")
+      .map((r) => {
+        const localPath = r.result?.localPath ?? "";
+        const localPathNoExt = localPath.replace(/\.[a-zA-Z0-9]+$/, "");
+        const notionUrl = localPath
+          ? (fileUrlByKey.get(localPath) ?? fileUrlByKey.get(localPathNoExt))
+          : undefined;
+        return {
+          id: r.id,
+          theme: r.theme,
+          description: r.description,
+          status: r.status,
+          imageUrl: notionUrl || null,
+          localPath,
+          createdAt: r.createdAt,
+        };
+      })
+      .filter((item) => item.imageUrl !== null);
+
+    res.json(galleryItems);
+  } catch (error) {
+    next(error);
+  }
+});
+
+stickersRouter.get("/gallery/download", async (req, res, next) => {
+  try {
+    const url = req.query.url as string | undefined;
+    if (!url) {
+      res.status(400).json({ error: "url query param is required" });
+      return;
+    }
+    const imageRes = await fetch(url);
+    if (!imageRes.ok) {
+      res.status(502).json({ error: "Failed to fetch image" });
+      return;
+    }
+    const buffer = Buffer.from(await imageRes.arrayBuffer());
+    const contentType = imageRes.headers.get("content-type") ?? "image/png";
+    const filename = (req.query.filename as string) || "sticker.png";
+    res.set("Content-Type", contentType);
+    res.set("Content-Disposition", `attachment; filename="${encodeURIComponent(filename)}"`);
+    res.set("Content-Length", String(buffer.length));
+    res.send(buffer);
+  } catch (error) {
+    next(error);
+  }
+});
+
+stickersRouter.post("/gallery/remove", async (req, res, next) => {
+  try {
+    const { localPath } = req.body as { localPath?: string };
+    if (!localPath) {
+      res.status(400).json({ error: "localPath is required" });
+      return;
+    }
+
+    const generatedPages = await listDataFolderRows("generated");
+    const page = generatedPages.find((p) => getRichTextProperty(p, "Relative Path") === localPath);
+    if (page) {
+      await archiveNotionPage(page.id);
+      res.json({ removed: true });
+    } else {
+      res.json({ removed: false, message: "Notion page not found for this path" });
+    }
   } catch (error) {
     next(error);
   }
