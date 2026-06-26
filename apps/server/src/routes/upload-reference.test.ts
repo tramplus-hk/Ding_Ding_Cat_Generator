@@ -112,7 +112,9 @@ describe("POST /api/stickers/upload-reference", () => {
 describe("POST /api/stickers/:id/generate", () => {
   test("returns a generating record immediately while background generation continues", async () => {
     const originalImageGenerationApiKey = config.imageGenerationApiKey;
+    const originalImageGenerationCandidateCount = config.imageGenerationCandidateCount;
     config.imageGenerationApiKey = "";
+    config.imageGenerationCandidateCount = 5;
 
     const server = createServer(app);
     await new Promise<void>((resolve) => server.listen(0, resolve));
@@ -156,13 +158,16 @@ describe("POST /api/stickers/:id/generate", () => {
       assert.equal(generatedRecord?.result?.candidates?.length, 5);
     } finally {
       config.imageGenerationApiKey = originalImageGenerationApiKey;
+      config.imageGenerationCandidateCount = originalImageGenerationCandidateCount;
       await new Promise<void>((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())));
     }
   });
 
   test("starts five-candidate generation and exposes the result through polling", async () => {
     const originalImageGenerationApiKey = config.imageGenerationApiKey;
+    const originalImageGenerationCandidateCount = config.imageGenerationCandidateCount;
     config.imageGenerationApiKey = "";
+    config.imageGenerationCandidateCount = 5;
 
     const server = createServer(app);
     await new Promise<void>((resolve) => server.listen(0, resolve));
@@ -201,13 +206,16 @@ describe("POST /api/stickers/:id/generate", () => {
       assert.equal(generatedRecord?.result?.candidatePreviews, undefined);
     } finally {
       config.imageGenerationApiKey = originalImageGenerationApiKey;
+      config.imageGenerationCandidateCount = originalImageGenerationCandidateCount;
       await new Promise<void>((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())));
     }
   });
 
   test("starts refinement and exposes the refined result through polling", async () => {
     const originalImageGenerationApiKey = config.imageGenerationApiKey;
+    const originalImageGenerationCandidateCount = config.imageGenerationCandidateCount;
     config.imageGenerationApiKey = "";
+    config.imageGenerationCandidateCount = 5;
 
     const server = createServer(app);
     await new Promise<void>((resolve) => server.listen(0, resolve));
@@ -271,6 +279,7 @@ describe("POST /api/stickers/:id/generate", () => {
       assert.equal(refinedRecord?.result?.candidates?.length, 5);
     } finally {
       config.imageGenerationApiKey = originalImageGenerationApiKey;
+      config.imageGenerationCandidateCount = originalImageGenerationCandidateCount;
       await new Promise<void>((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())));
     }
   });
