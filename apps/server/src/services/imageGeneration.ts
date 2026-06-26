@@ -10,6 +10,7 @@ const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "
 const runtimeGeneratedRoot = config.runtimeGeneratedRoot;
 const baselineRoot = path.join(projectRoot, "data/baseline");
 const maxBaselineReferences = 8;
+let imageEditQueue: Promise<void> = Promise.resolve();
 
 function logGenerationStep(step: string, fields: Record<string, string | number | boolean | undefined> = {}): void {
   const details = Object.entries(fields)
@@ -403,13 +404,25 @@ async function requestImageEdit(prompt: string, referenceImages: ReferenceImage[
     formData.append("image[]", new Blob([reference.body], { type: reference.mimeType }), reference.fileName);
   }
 
-  return fetch(`${config.imageGenerationApiUrl.replace(/\/$/, "")}/images/edits`, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${config.imageGenerationApiKey}`,
-    },
-    body: formData,
+  const previousEdit = imageEditQueue;
+  let releaseEdit!: () => void;
+  imageEditQueue = new Promise((resolve) => {
+    releaseEdit = resolve;
   });
+
+  await previousEdit;
+
+  try {
+    return await fetch(`${config.imageGenerationApiUrl.replace(/\/$/, "")}/images/edits`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${config.imageGenerationApiKey}`,
+      },
+      body: formData,
+    });
+  } finally {
+    releaseEdit();
+  }
 }
 
 export async function generateSticker(record: StickerRecord, options: GenerateOptions = {}): Promise<StickerResult> {

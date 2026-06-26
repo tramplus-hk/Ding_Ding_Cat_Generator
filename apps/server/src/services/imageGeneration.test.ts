@@ -165,6 +165,51 @@ describe("generateSticker", () => {
     });
   });
 
+  test("serializes GPT Image 2 edit requests with references", async () => {
+    const pngBytes = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+    const baselineDirectory = path.resolve(process.cwd(), "../..", "data/baseline/serial-edit-reference");
+    const baselinePath = path.join(baselineDirectory, "ding-ding.png");
+    let activeRequests = 0;
+    let maxActiveRequests = 0;
+
+    await mkdir(baselineDirectory, { recursive: true });
+    await writeFile(baselinePath, pngBytes);
+
+    globalThis.fetch = (async (input, init) => {
+      assert.equal(String(input), "https://example.test/v1/images/edits");
+      assert.ok(init?.body instanceof FormData);
+
+      activeRequests += 1;
+      maxActiveRequests = Math.max(maxActiveRequests, activeRequests);
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      activeRequests -= 1;
+
+      return new Response(JSON.stringify({ data: [{ b64_json: pngBytes.toString("base64") }] }), {
+        headers: { "content-type": "application/json" },
+      });
+    }) as typeof fetch;
+
+    const record: StickerRecord = {
+      id: "serial-edit-test",
+      format: "svg",
+      theme: "serial edit",
+      description: "avoid concurrent edits",
+      status: "generating",
+      createdAt: new Date(0).toISOString(),
+      updatedAt: new Date(0).toISOString(),
+    };
+
+    try {
+      const result = await generateSticker(record, { count: 3 });
+
+      assert.equal(result.candidates?.length, 3);
+      assert.equal(maxActiveRequests, 1);
+    } finally {
+      await rm(baselineDirectory, { recursive: true, force: true });
+      await rm(path.resolve(config.runtimeGeneratedRoot, "serial_edit"), { recursive: true, force: true });
+    }
+  });
+
   test("explains upstream socket failures when every candidate request fails", async () => {
     globalThis.fetch = (async () => {
       const socketError = Object.assign(new Error("other side closed"), { code: "UND_ERR_SOCKET" });
