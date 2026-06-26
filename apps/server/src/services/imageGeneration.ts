@@ -423,7 +423,11 @@ export async function generateSticker(record: StickerRecord, options: GenerateOp
   const candidateUrls: Record<string, string> = {};
   let completedCount = 0;
 
-  const candidateTasks = Array.from({ length: count }, async (_value, i) => {
+  const settled: Array<{ index: number; candidatePath: string }> = [];
+  const failures: unknown[] = [];
+  let nextCandidateIndex = 0;
+
+  async function generateCandidate(i: number): Promise<void> {
     const index = i + 1;
     const candidateStartedAt = Date.now();
     logGenerationStep("candidate_started", {
@@ -475,20 +479,24 @@ export async function generateSticker(record: StickerRecord, options: GenerateOp
       candidatePath,
     });
 
-    return { index, candidatePath };
-  });
+    settled.push({ index, candidatePath });
+  }
 
-  const results = await Promise.allSettled(candidateTasks);
-  const settled: Array<{ index: number; candidatePath: string }> = [];
-  const failures: unknown[] = [];
+  async function generateNextCandidate(): Promise<void> {
+    while (nextCandidateIndex < count) {
+      const candidateIndex = nextCandidateIndex;
+      nextCandidateIndex += 1;
 
-  for (const result of results) {
-    if (result.status === "fulfilled") {
-      settled.push(result.value);
-    } else {
-      failures.push(result.reason);
+      try {
+        await generateCandidate(candidateIndex);
+      } catch (error) {
+        failures.push(error);
+      }
     }
   }
+
+  const workerCount = Math.min(count, config.imageGenerationConcurrency);
+  await Promise.all(Array.from({ length: workerCount }, generateNextCandidate));
 
   if (settled.length === 0) {
     const error = failures[0];

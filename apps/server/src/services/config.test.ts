@@ -11,6 +11,7 @@ const originalEnv = {
   NANO_BANANA_MODEL: process.env.NANO_BANANA_MODEL,
   AI_GATEWAY_API_KEY: process.env.AI_GATEWAY_API_KEY,
   IMAGE_GENERATION_CANDIDATE_COUNT: process.env.IMAGE_GENERATION_CANDIDATE_COUNT,
+  IMAGE_GENERATION_CONCURRENCY: process.env.IMAGE_GENERATION_CONCURRENCY,
 };
 
 function restoreEnv(): void {
@@ -89,5 +90,29 @@ describe("config", () => {
     const { config } = await loadConfig();
 
     assert.equal(config.imageGenerationCandidateCount, 5);
+  });
+
+  test("limits image generation concurrency to two by default", async () => {
+    process.env.IMAGE_GENERATION_CONCURRENCY = "";
+
+    const { config } = await loadConfig();
+
+    assert.equal(config.imageGenerationConcurrency, 2);
+  });
+
+  test("uses default image generation concurrency when configured value is invalid", async () => {
+    process.env.IMAGE_GENERATION_CONCURRENCY = "not-a-number";
+
+    const { config } = await loadConfig();
+
+    assert.equal(config.imageGenerationConcurrency, 2);
+  });
+
+  test("uses a whole number for configured image generation concurrency", async () => {
+    process.env.IMAGE_GENERATION_CONCURRENCY = "2.9";
+
+    const { config } = await loadConfig();
+
+    assert.equal(config.imageGenerationConcurrency, 2);
   });
 });

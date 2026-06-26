@@ -17,6 +17,11 @@ function firstNonEmpty(...values: Array<string | undefined>): string {
   return values.find((value) => value !== undefined && value !== "") ?? "";
 }
 
+function positiveNumberOrDefault(value: string, defaultValue: number): number {
+  const parsed = Number(value || defaultValue);
+  return Number.isFinite(parsed) ? Math.max(1, Math.floor(parsed)) : defaultValue;
+}
+
 const imageGenerationApiKey = firstNonEmpty(
   process.env.IMAGE_GENERATION_API_KEY,
   process.env.OPENAI_API_KEY,
@@ -35,6 +40,7 @@ export const config = {
   imageGenerationApiUrl,
   imageGenerationModel: firstNonEmpty(process.env.IMAGE_GENERATION_MODEL, process.env.NANO_BANANA_MODEL) || "openai/gpt-image-2",
   imageGenerationCandidateCount: Number(firstNonEmpty(process.env.IMAGE_GENERATION_CANDIDATE_COUNT) || 5),
+  imageGenerationConcurrency: positiveNumberOrDefault(firstNonEmpty(process.env.IMAGE_GENERATION_CONCURRENCY), 2),
   notionToken: process.env.NOTION_TOKEN ?? "",
   notionDatabaseId: process.env.NOTION_DATABASE_ID ?? "",
   blobReadWriteToken: process.env.BLOB_READ_WRITE_TOKEN ?? "",

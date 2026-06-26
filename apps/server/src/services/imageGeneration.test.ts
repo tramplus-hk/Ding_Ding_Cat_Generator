@@ -11,6 +11,7 @@ const originalConfig = {
   imageGenerationApiKey: config.imageGenerationApiKey,
   imageGenerationApiUrl: config.imageGenerationApiUrl,
   imageGenerationModel: config.imageGenerationModel,
+  imageGenerationConcurrency: config.imageGenerationConcurrency,
   notionToken: config.notionToken,
   notionDatabaseId: config.notionDatabaseId,
   blobReadWriteToken: config.blobReadWriteToken,
@@ -21,6 +22,7 @@ describe("generateSticker", () => {
     config.imageGenerationApiKey = "test-key";
     config.imageGenerationApiUrl = "https://example.test/v1";
     config.imageGenerationModel = "openai/gpt-image-2";
+    config.imageGenerationConcurrency = 2;
     config.notionToken = "";
     config.notionDatabaseId = "";
     config.blobReadWriteToken = "";
@@ -120,7 +122,7 @@ describe("generateSticker", () => {
     });
   });
 
-  test("requests GPT Image 2 candidates in parallel", async () => {
+  test("limits concurrent GPT Image 2 candidate requests", async () => {
     const pngBytes = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
     let activeRequests = 0;
     let maxActiveRequests = 0;
@@ -149,7 +151,7 @@ describe("generateSticker", () => {
     const result = await generateSticker(record, { count: 3 });
 
     assert.equal(result.candidates?.length, 3);
-    assert.ok(maxActiveRequests > 1);
+    assert.equal(maxActiveRequests, 2);
     assert.deepEqual(
       result.candidates?.map((candidate) => path.basename(candidate)),
       ["candidate-01.png", "candidate-02.png", "candidate-03.png"],
