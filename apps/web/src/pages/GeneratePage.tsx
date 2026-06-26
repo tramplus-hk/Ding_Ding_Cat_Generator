@@ -148,24 +148,12 @@ export function GeneratePage() {
   const [showRejectModal, setShowRejectModal] = useState(false);
   const dragCounterRef = useRef(0);
   const previewsRef = useRef<Record<string, string>>({});
+  const scrollRef = useRef<HTMLDivElement>(null);
   const photoInputRef = useRef<HTMLInputElement>(null);
 
   const currentFestival = FESTIVALS.find((f) => f.id === festivalId) ?? FESTIVALS[0];
   const selectedCandidate = selectedPath ?? record?.result?.selectedPath ?? record?.result?.candidates?.[0] ?? null;
   const resultImageUrl = selectedCandidate ? getCandidatePreviewUrl(record!, selectedCandidate, candidatePreviews) : null;
-
-  useEffect(() => {
-    try {
-      const saved = localStorage.getItem("refineHistory");
-      if (saved) setRefineHistory(JSON.parse(saved));
-    } catch { /* noop */ }
-  }, [setRefineHistory]);
-
-  useEffect(() => {
-    try {
-      localStorage.setItem("refineHistory", JSON.stringify(refineHistory));
-    } catch { /* noop */ }
-  }, [refineHistory]);
 
   function handleFestivalChange(value: string) {
     setFestivalId(value);
@@ -255,11 +243,6 @@ export function GeneratePage() {
     }
   }
 
-  function esc(str: string) {
-    const map: Record<string, string> = { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" };
-    return str.replace(/[&<>"']/g, (s) => map[s]);
-  }
-
   async function handleGenerate() {
     const prompt = description.trim();
     if (!prompt || busy) return;
@@ -307,22 +290,14 @@ export function GeneratePage() {
       setCandidatePreviews(refreshPreviews);
       previewsRef.current = refreshPreviews;
 
-      const firstCandidate = generatedRecord.result?.candidates?.[0];
-      const firstCandidatePreview = firstCandidate
-        ? (previewsRef.current[firstCandidate] || getCandidatePreviewUrl(generatedRecord, firstCandidate, {}))
-        : null;
-      const previewUrl = historyPreviewUrl || firstCandidatePreview;
-      const isReference = Boolean(historyPreviewUrl);
-      if (previewUrl) {
-        setRefineHistory((prev) => [{
-          previewUrl,
-          description: prompt,
-          subtitle: isReference ? "Reference image" : prompt,
-          time: Date.now(),
-          record: generatedRecord,
-          previews: { ...previewsRef.current },
-        }, ...prev]);
-      }
+      setRefineHistory((prev) => [{
+        previewUrl: historyPreviewUrl || "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7",
+        description: prompt,
+        subtitle: historyPreviewUrl ? "Reference image" : prompt,
+        time: Date.now(),
+        record: generatedRecord,
+        previews: { ...previewsRef.current },
+      }, ...prev]);
     } catch (caughtError) {
       setError(caughtError instanceof Error ? caughtError.message : "Failed to generate sticker");
     } finally {
@@ -485,17 +460,22 @@ export function GeneratePage() {
   }
 
   function restoreFromHistory(item: typeof refineHistory[number]) {
-    console.log("restoreFromHistory", {
-      recordId: item.record?.id,
-      candidateCount: item.record?.result?.candidates?.length,
-      candidates: item.record?.result?.candidates,
-      previewKeys: Object.keys(item.previews),
-      previewCount: Object.keys(item.previews).length,
-    });
     setRecord(item.record);
     setCandidatePreviews(item.previews);
     setSelectedPath(item.record.result?.selectedPath ?? item.record.result?.candidates?.[0] ?? null);
     setShowRefinePanel(false);
+  }
+
+  function scrollRefineHistory(direction: "left" | "right") {
+    const container = scrollRef.current;
+    if (!container) return;
+    const thumb = container.querySelector(".refine-thumb") as HTMLElement | null;
+    const gap = 10;
+    const itemWidth = thumb ? thumb.offsetWidth + gap : 95;
+    container.scrollBy({
+      left: direction === "left" ? -itemWidth : itemWidth,
+      behavior: "smooth",
+    });
   }
 
   return (
@@ -720,25 +700,39 @@ export function GeneratePage() {
           {refineHistory.length === 0 ? (
             <div className="empty-history">Refined images will appear here. Use the Refine button to iterate on your design.</div>
           ) : (
-            <div className="refine-grid">
-              {refineHistory.map((item) => (
-                <button
-                  className="refine-thumb"
-                  key={item.time}
-                  type="button"
-                  disabled={busy}
-                  onClick={() => restoreFromHistory(item)}
-                >
-                  <img
-                    src={item.previewUrl}
-                    alt={item.description}
-                    onDoubleClick={(e) => { e.stopPropagation(); setLightboxImage(item.previewUrl); }}
-                  />
-                  <div className="thumb-id">{item.record?.id?.slice(0, 8)}</div>
-                  <div className="thumb-label">{esc(item.description.slice(0, 25))}{item.description.length > 25 ? "…" : ""}</div>
-                  <div className="thumb-subtitle">{esc(item.subtitle.slice(0, 30))}{item.subtitle.length > 30 ? "…" : ""}</div>
-                </button>
-              ))}
+            <div className="refine-scroll-wrapper">
+              <button
+                className="refine-scroll-btn refine-scroll-left"
+                type="button"
+                disabled={busy}
+                onClick={() => scrollRefineHistory("left")}
+                aria-label="Scroll left"
+              >◀</button>
+              <div className="refine-scroll-container" ref={scrollRef}>
+                {refineHistory.map((item) => (
+                  <button
+                    className="refine-thumb"
+                    key={item.time}
+                    type="button"
+                    disabled={busy}
+                    onClick={() => restoreFromHistory(item)}
+                  >
+                    <img
+                      src={item.previewUrl}
+                      alt={item.description}
+                      onDoubleClick={(e) => { e.stopPropagation(); setLightboxImage(item.previewUrl); }}
+                    />
+                    <div className="thumb-subtitle">{item.subtitle}</div>
+                  </button>
+                ))}
+              </div>
+              <button
+                className="refine-scroll-btn refine-scroll-right"
+                type="button"
+                disabled={busy}
+                onClick={() => scrollRefineHistory("right")}
+                aria-label="Scroll right"
+              >▶</button>
             </div>
           )}
         </aside>

@@ -304,6 +304,11 @@ async function buildDataFileProperties(file: DataFolderFile, uploadedFileId?: st
   const stats = file.data ? undefined : await stat(file.absolutePath);
   const extension = path.extname(file.relativePath).replace(/^\./, "");
   const fileType = extension === "json" ? "json" : isImageFile(file.relativePath) ? "image" : "file";
+  const rawName = path.basename(file.relativePath);
+  const maxNameLen = 100;
+  const safeName = rawName.length > maxNameLen
+    ? rawName.slice(0, maxNameLen - path.extname(rawName).length) + path.extname(rawName)
+    : rawName;
 
   return {
     Name: title(path.basename(file.content)),
@@ -313,7 +318,7 @@ async function buildDataFileProperties(file: DataFolderFile, uploadedFileId?: st
     Extension: richText(extension),
     "Relative Path": richText(file.relativePath),
     File: uploadedFileId
-      ? { files: [{ name: path.basename(file.relativePath), type: "file_upload", file_upload: { id: uploadedFileId } }] }
+      ? { files: [{ name: safeName, type: "file_upload", file_upload: { id: uploadedFileId } }] }
       : { files: [] },
     "Size Bytes": number(file.sizeBytes ?? stats?.size),
     "Updated At": date(file.updatedAt ?? stats?.mtime.toISOString()),
