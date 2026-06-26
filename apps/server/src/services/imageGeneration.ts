@@ -78,7 +78,7 @@ type ImageGenerationResponse = {
   data?: Array<{ b64_json?: string; url?: string }>;
 };
 
-type GenerateOptions = {
+export type GenerateOptions = {
   count?: number;
   selectedImagePath?: string;
   selectedImageUrl?: string;
@@ -87,7 +87,14 @@ type GenerateOptions = {
   referenceImageUrl?: string;
   readCanonicalReferenceBlob?: (pathname: string) => Promise<Buffer | undefined>;
   readSelectedImageBlob?: (pathname: string) => Promise<Buffer | undefined>;
+  beforeWrite?: () => Promise<boolean> | boolean;
   onProgress?: (current: number, total: number, candidatePath: string, previewDataUrl?: string) => void;
+};
+
+export type GeneratedCandidate = {
+  index: number;
+  candidatePath: string;
+  blobPathname?: string;
 };
 
 function slugify(value: string): string {
@@ -98,6 +105,12 @@ function slugify(value: string): string {
       .replace(/[^a-z0-9]+/g, "_")
       .replace(/^_+|_+$/g, "") || "untitled"
   );
+}
+
+async function assertCanWriteCandidate(options: GenerateOptions): Promise<void> {
+  if (options.beforeWrite && !(await options.beforeWrite())) {
+    throw new Error("Generation run is no longer current");
+  }
 }
 
 function describeTheme(theme: string): string {
@@ -453,6 +466,7 @@ async function generateWithImageProvider(
     throw new Error("GPT Image 2 response did not include an image");
   }
 
+  await assertCanWriteCandidate(options);
   await writeFile(outputPath, Buffer.from(imageBase64, "base64"));
 }
 
@@ -506,13 +520,73 @@ async function requestImageEdit(prompt: string, referenceImages: ReferenceImage[
   }
 }
 
+export async function generateStickerCandidate(
+  record: StickerRecord,
+  options: GenerateOptions & { count: number; runId: string; candidateIndex: number },
+): Promise<GeneratedCandidate> {
+  const index = options.candidateIndex;
+  const candidateStartedAt = Date.now();
+  const generatedDirectory = path.join(runtimeGeneratedRoot, slugify(record.theme), slugify(record.description));
+  const trialDirectory = path.join(generatedDirectory, `trial-${options.runId}`);
+
+  await mkdir(trialDirectory, { recursive: true });
+  logGenerationStep("candidate_started", {
+    recordId: record.id,
+    candidate: `${index}/${options.count}`,
+  });
+
+  const fileName = config.imageGenerationApiKey
+    ? `candidate-${String(index).padStart(2, "0")}.png`
+    : record.format === "gif"
+      ? `candidate-${String(index).padStart(2, "0")}.gif`
+      : `candidate-${String(index).padStart(2, "0")}.svg`;
+  const absolutePath = path.join(trialDirectory, fileName);
+
+  if (config.imageGenerationApiKey) {
+    const maxProviderAttempts = 3;
+    for (let attempt = 1; attempt <= maxProviderAttempts; attempt += 1) {
+      const attemptStartedAt = Date.now();
+      try {
+        await generateWithImageProvider(record, absolutePath, options, index);
+        break;
+      } catch (error) {
+        const attemptElapsedMs = Date.now() - attemptStartedAt;
+        if (attempt === maxProviderAttempts || attemptElapsedMs >= maxRetryableProviderAttemptMs || !isRetryableImageProviderError(error)) {
+          throw error;
+        }
+
+        logGenerationError("candidate_retrying", error, {
+          recordId: record.id,
+          candidate: `${index}/${options.count}`,
+          attempt,
+        });
+      }
+    }
+  } else if (record.format === "gif") {
+    await assertCanWriteCandidate(options);
+    await writeFile(absolutePath, `GIF placeholder candidate ${index}: image generation integration pending.\n`, "utf8");
+  } else {
+    await assertCanWriteCandidate(options);
+    await writeFile(absolutePath, buildPlaceholderSvg(record), "utf8");
+  }
+
+  logGenerationStep("candidate_file_written", {
+    recordId: record.id,
+    candidate: `${index}/${options.count}`,
+    fileName,
+    elapsedMs: Date.now() - candidateStartedAt,
+  });
+
+  const candidatePath = path.join(".runtime/generated", path.relative(runtimeGeneratedRoot, absolutePath)).replace(/\\/g, "/");
+  await assertCanWriteCandidate(options);
+  const blobPathname = await uploadRuntimeCandidateBlob(record.id, candidatePath, absolutePath, options.runId);
+
+  return { index, candidatePath, blobPathname };
+}
+
 export async function generateSticker(record: StickerRecord, options: GenerateOptions = {}): Promise<StickerResult> {
   const count = options.count ?? 5;
   const generationStartedAt = Date.now();
-  const generatedDirectory = path.join(runtimeGeneratedRoot, slugify(record.theme), slugify(record.description));
-  const trialDirectory = path.join(generatedDirectory, `trial-${Date.now()}`);
-
-  await mkdir(trialDirectory, { recursive: true });
 
   logGenerationStep("generation_started", {
     recordId: record.id,
@@ -528,69 +602,12 @@ export async function generateSticker(record: StickerRecord, options: GenerateOp
   const settled: Array<{ index: number; candidatePath: string }> = [];
   const failures: unknown[] = [];
   let nextCandidateIndex = 0;
-  const maxProviderAttempts = 3;
 
   async function generateCandidate(i: number): Promise<void> {
     const index = i + 1;
-    const candidateStartedAt = Date.now();
-    logGenerationStep("candidate_started", {
-      recordId: record.id,
-      candidate: `${index}/${count}`,
-    });
-    const fileName = config.imageGenerationApiKey
-      ? `candidate-${String(index).padStart(2, "0")}.png`
-      : record.format === "gif"
-        ? `candidate-${String(index).padStart(2, "0")}.gif`
-        : `candidate-${String(index).padStart(2, "0")}.svg`;
-    const absolutePath = path.join(trialDirectory, fileName);
+    const generated = await generateStickerCandidate(record, { ...options, count, runId: String(generationStartedAt), candidateIndex: index });
 
-    if (config.imageGenerationApiKey) {
-      for (let attempt = 1; attempt <= maxProviderAttempts; attempt += 1) {
-        const attemptStartedAt = Date.now();
-        try {
-          await generateWithImageProvider(record, absolutePath, { ...options, count }, index);
-          break;
-        } catch (error) {
-          const attemptElapsedMs = Date.now() - attemptStartedAt;
-          if (
-            attempt === maxProviderAttempts
-            || attemptElapsedMs >= maxRetryableProviderAttemptMs
-            || !isRetryableImageProviderError(error)
-          ) {
-            throw error;
-          }
-
-          logGenerationError("candidate_retrying", error, {
-            recordId: record.id,
-            candidate: `${index}/${count}`,
-            attempt,
-          });
-        }
-      }
-    } else if (record.format === "gif") {
-      await writeFile(absolutePath, `GIF placeholder candidate ${index}: image generation integration pending.\n`, "utf8");
-    } else {
-      await writeFile(absolutePath, buildPlaceholderSvg(record), "utf8");
-    }
-
-    logGenerationStep("candidate_file_written", {
-      recordId: record.id,
-      candidate: `${index}/${count}`,
-      fileName,
-      elapsedMs: Date.now() - candidateStartedAt,
-    });
-
-    const candidatePath = path.join(".runtime/generated", path.relative(runtimeGeneratedRoot, absolutePath)).replace(/\\/g, "/");
-    logGenerationStep("candidate_blob_upload_started", {
-      recordId: record.id,
-      candidate: `${index}/${count}`,
-    });
-    const blobPathname = await uploadRuntimeCandidateBlob(record.id, candidatePath, absolutePath);
-    logGenerationStep("candidate_blob_upload_completed", {
-      recordId: record.id,
-      candidate: `${index}/${count}`,
-      uploaded: Boolean(blobPathname),
-    });
+    const { candidatePath, blobPathname } = generated;
     if (blobPathname) {
       candidateUrls[candidatePath] = blobPathname;
     }
@@ -603,7 +620,7 @@ export async function generateSticker(record: StickerRecord, options: GenerateOp
       candidatePath,
     });
 
-    settled.push({ index, candidatePath });
+    settled.push(generated);
   }
 
   async function generateNextCandidate(): Promise<void> {

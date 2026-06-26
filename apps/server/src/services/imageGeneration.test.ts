@@ -650,4 +650,23 @@ describe("generateSticker", () => {
     assert.doesNotMatch(prompt, /USER-PROVIDED REFERENCE IMAGE/i);
     assert.equal(requests[0].body.getAll("image[]").length, 1);
   });
+
+  test("exports single candidate generation with run-scoped blob upload", async () => {
+    const source = await readFile(path.resolve(process.cwd(), "src/services/imageGeneration.ts"), "utf8");
+
+    assert.match(source, /export type GeneratedCandidate = \{/);
+    assert.match(source, /export async function generateStickerCandidate\(/);
+    assert.match(source, /candidateIndex: number/);
+    assert.match(source, /runId: string/);
+    assert.match(source, /uploadRuntimeCandidateBlob\(record\.id, candidatePath, absolutePath, options\.runId\)/);
+  });
+
+  test("checks an optional before-write guard before candidate file and Blob writes", async () => {
+    const source = await readFile(path.resolve(process.cwd(), "src/services/imageGeneration.ts"), "utf8");
+
+    assert.match(source, /beforeWrite\?: \(\) => Promise<boolean> \| boolean/);
+    assert.match(source, /async function assertCanWriteCandidate\(options: GenerateOptions\)/);
+    assert.match(source, /await assertCanWriteCandidate\(options\);\s+await writeFile/s);
+    assert.match(source, /await assertCanWriteCandidate\(options\);\s+const blobPathname = await uploadRuntimeCandidateBlob/s);
+  });
 });
