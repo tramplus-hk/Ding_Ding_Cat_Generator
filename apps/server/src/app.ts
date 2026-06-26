@@ -1,11 +1,13 @@
 import cors from "cors";
 import express from "express";
+import { serve } from "inngest/express";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { ZodError } from "zod";
 import { config } from "./config.js";
 import { notionRouter } from "./routes/notion.js";
 import { stickersRouter } from "./routes/stickers.js";
+import { generationFunctions, inngest } from "./services/generationJobs.js";
 
 export const app = express();
 
@@ -50,6 +52,7 @@ app.get("/api/health", (_req, res) => {
   res.json({ ok: true });
 });
 
+app.use("/api/inngest", serve({ client: inngest, functions: generationFunctions }));
 app.use("/api/stickers", stickersRouter);
 app.use("/api/notion", notionRouter);
 
