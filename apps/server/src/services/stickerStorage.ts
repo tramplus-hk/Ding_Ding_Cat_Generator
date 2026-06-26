@@ -66,6 +66,10 @@ async function writeRuntimeRecord(record: StickerRecord): Promise<void> {
 }
 
 async function readRuntimeRecord(id: string): Promise<StickerRecord | undefined> {
+  if (shouldUseRuntimeBlob()) {
+    return readRuntimeRecordBlob(id);
+  }
+
   const blobRecord = await readRuntimeRecordBlob(id);
 
   if (blobRecord) {
@@ -76,6 +80,10 @@ async function readRuntimeRecord(id: string): Promise<StickerRecord | undefined>
 }
 
 async function listRuntimeRecords(): Promise<StickerRecord[]> {
+  if (shouldUseRuntimeBlob()) {
+    return listRuntimeRecordBlobs();
+  }
+
   const blobRecords = await listRuntimeRecordBlobs();
 
   if (blobRecords.length > 0) {
@@ -160,7 +168,8 @@ async function removeEmptyParentDirectories(startDirectory: string): Promise<voi
 }
 
 export async function listStickerRecords(): Promise<StickerRecord[]> {
-  const draftRecords = [...runtimeRecords.values(), ...(await listRuntimeRecords())];
+  const persistedRuntimeRecords = await listRuntimeRecords();
+  const draftRecords = shouldUseRuntimeBlob() ? persistedRuntimeRecords : [...runtimeRecords.values(), ...persistedRuntimeRecords];
   const uniqueDraftRecords = Array.from(new Map(draftRecords.map((record) => [record.id, record])).values());
 
   if (shouldUseNotionStorage()) {
@@ -176,6 +185,19 @@ export async function listStickerRecords(): Promise<StickerRecord[]> {
 }
 
 export async function getStickerRecord(id: string): Promise<StickerRecord | undefined> {
+  if (shouldUseRuntimeBlob()) {
+    const persistedRuntimeRecord = await readRuntimeRecord(id);
+
+    if (persistedRuntimeRecord) {
+      runtimeRecords.set(id, persistedRuntimeRecord);
+      return persistedRuntimeRecord;
+    }
+
+    runtimeRecords.delete(id);
+    const records = await listStickerRecords();
+    return records.find((record) => record.id === id);
+  }
+
   const runtimeRecord = runtimeRecords.get(id);
 
   if (runtimeRecord) {

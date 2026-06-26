@@ -12,6 +12,7 @@ import {
 } from "./stickerStorage.js";
 
 const projectRoot = path.resolve(process.cwd(), "../..");
+const stickerStorageSourcePath = new URL("./stickerStorage.ts", import.meta.url);
 
 function slugify(value: string): string {
   return value
@@ -29,6 +30,32 @@ async function exists(filePath: string): Promise<boolean> {
 }
 
 describe("stickerStorage", () => {
+  test("Blob runtime records are the source of truth over warm memory cache", async () => {
+    const source = await readFile(stickerStorageSourcePath, "utf8");
+    const getStickerRecordSource = source.slice(
+      source.indexOf("export async function getStickerRecord"),
+      source.indexOf("export async function createStickerRecord"),
+    );
+    const blobBranchSource = getStickerRecordSource.slice(
+      getStickerRecordSource.indexOf("if (shouldUseRuntimeBlob())"),
+      getStickerRecordSource.indexOf("const runtimeRecord = runtimeRecords.get(id)"),
+    );
+    const listStickerRecordsSource = source.slice(
+      source.indexOf("export async function listStickerRecords"),
+      source.indexOf("export async function getStickerRecord"),
+    );
+
+    assert.ok(getStickerRecordSource.includes("if (shouldUseRuntimeBlob())"));
+    assert.ok(
+      getStickerRecordSource.indexOf("await readRuntimeRecord(id)") < getStickerRecordSource.indexOf("runtimeRecords.get(id)"),
+    );
+    assert.ok(blobBranchSource.includes("runtimeRecords.delete(id)"));
+    assert.ok(listStickerRecordsSource.includes("shouldUseRuntimeBlob()"));
+    assert.ok(
+      listStickerRecordsSource.indexOf("await listRuntimeRecords()") < listStickerRecordsSource.indexOf("runtimeRecords.values()"),
+    );
+  });
+
   test("keeps draft records in memory and persists JSON only on accept", async () => {
     const suffix = randomUUID();
     const record = await createStickerRecord({
