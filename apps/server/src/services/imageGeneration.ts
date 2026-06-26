@@ -85,6 +85,8 @@ type GenerateOptions = {
   refinementRequirement?: string;
   referenceImagePath?: string;
   referenceImageUrl?: string;
+  readCanonicalReferenceBlob?: (pathname: string) => Promise<Buffer | undefined>;
+  readSelectedImageBlob?: (pathname: string) => Promise<Buffer | undefined>;
   onProgress?: (current: number, total: number, candidatePath: string, previewDataUrl?: string) => void;
 };
 
@@ -123,8 +125,11 @@ function buildPlaceholderSvg(record: StickerRecord): string {
 }
 
 
-function buildGenerationPrompt(record: StickerRecord, options: GenerateOptions = {}, variationIndex?: number): string {
-  const referenceBlock = options.referenceImagePath || options.referenceImageUrl
+function buildGenerationPrompt(record: StickerRecord, options: GenerateOptions = {}, variationIndex?: number, usedCanonicalReference = false): string {
+  const canonicalReferenceBlock = usedCanonicalReference
+    ? `\nBASELINE REFERENCE IMAGE:\n- The baseline reference image is a turnaround sheet containing front, left, right, and back views of Ding Ding Cat.\n- Use it only to preserve mascot identity: bell, body shape, colors, markings, and DING DING text.\n`
+    : "";
+  const referenceBlock = !options.refinementRequirement && (options.referenceImagePath || options.referenceImageUrl)
     ? `\nUSER-PROVIDED REFERENCE IMAGE:\n- The uploaded image contains visual elements the user wants included.\n- Incorporate key visual elements such as objects, colors, or composition ideas from the uploaded image into the sticker design.\n- Ding Ding Cat must remain the primary subject.\n- Adapt the uploaded image elements to the 2D vector flat-graphic sticker style described below.\n`
     : "";
   const refinementBlock = options.refinementRequirement
@@ -137,7 +142,7 @@ function buildGenerationPrompt(record: StickerRecord, options: GenerateOptions =
   return `${describeTheme(record.theme)}
 
 Sticker description: ${record.description}
-${referenceBlock}${refinementBlock}${variationBlock}
+${canonicalReferenceBlock}${referenceBlock}${refinementBlock}${variationBlock}
 
 CRITICAL CHARACTER DETAILS:
 - This is Ding Ding Cat, the official mascot of Hong Kong Tramways.
@@ -227,6 +232,58 @@ async function imageUrlToReferenceImage(url: string): Promise<ReferenceImage | u
   }
 }
 
+async function loadCanonicalReferenceImage(options: GenerateOptions): Promise<ReferenceImage | undefined> {
+  if (!config.blobReadWriteToken) {
+    return undefined;
+  }
+
+  const readBlob = options.readCanonicalReferenceBlob ?? readRuntimeBlob;
+  let body: Buffer | undefined;
+
+  try {
+    body = await readBlob(config.canonicalReferenceBlobPathname);
+  } catch (error) {
+    logGenerationError("canonical_reference_fallback", error, {
+      pathname: config.canonicalReferenceBlobPathname,
+    });
+    return undefined;
+  }
+
+  if (!body) {
+    logGenerationStep("canonical_reference_unavailable", {
+      pathname: config.canonicalReferenceBlobPathname,
+    });
+    return undefined;
+  }
+
+  return {
+    fileName: path.basename(config.canonicalReferenceBlobPathname) || "turnaround.png",
+    mimeType: path.extname(config.canonicalReferenceBlobPathname).toLowerCase() === ".webp" ? "image/webp" : "image/png",
+    body,
+  };
+}
+
+function referenceImageFromBody(filePath: string, body: Buffer): ReferenceImage {
+  const extension = path.extname(filePath).toLowerCase();
+
+  return {
+    fileName: path.basename(filePath) || "reference.png",
+    mimeType: extension === ".webp" ? "image/webp" : extension === ".jpg" || extension === ".jpeg" ? "image/jpeg" : "image/png",
+    body,
+  };
+}
+
+async function loadInitialReferenceImages(record: StickerRecord, options: GenerateOptions): Promise<{ references: ReferenceImage[]; usedCanonical: boolean }> {
+  const canonicalReference = await loadCanonicalReferenceImage(options);
+  const baselineReferences = canonicalReference ? [canonicalReference] : await loadReferenceImages(record);
+  const userReferences = await loadUserReferenceImages(options.referenceImagePath, options.referenceImageUrl);
+
+  return {
+    references: [...baselineReferences, ...userReferences],
+    usedCanonical: Boolean(canonicalReference),
+  };
+}
+
 async function loadReferenceImages(_record: StickerRecord): Promise<ReferenceImage[]> {
   if (config.notionToken && config.notionDatabaseId) {
     const baselineReferenceUrls = (await listDataFolderFileUrls("baseline")).slice(0, config.imageGenerationBaselineReferenceCount);
@@ -243,13 +300,29 @@ async function loadReferenceImages(_record: StickerRecord): Promise<ReferenceIma
   return Promise.all(baselineReferences.map(imagePathToReferenceImage));
 }
 
-async function loadSelectedReferenceImages(selectedImagePath?: string, selectedImageUrl?: string): Promise<ReferenceImage[]> {
+async function loadSelectedReferenceImages(options: GenerateOptions, requireAvailable = false): Promise<ReferenceImage[]> {
+  const { selectedImagePath, selectedImageUrl } = options;
+
   if (selectedImageUrl) {
-    const reference = await imageUrlToReferenceImage(selectedImageUrl);
+    const readSelectedBlob = options.readSelectedImageBlob ?? readRuntimeBlob;
+    const selectedBlob = /^https?:\/\//i.test(selectedImageUrl)
+      ? undefined
+      : await readSelectedBlob(selectedImageUrl);
+    const reference = selectedBlob
+      ? referenceImageFromBody(selectedImageUrl, selectedBlob)
+      : await imageUrlToReferenceImage(selectedImageUrl);
+    if (!reference && requireAvailable) {
+      throw new Error("Selected image reference unavailable");
+    }
+
     return reference ? [reference] : [];
   }
 
   if (!selectedImagePath) {
+    if (requireAvailable) {
+      throw new Error("Selected image reference unavailable");
+    }
+
     return [];
   }
 
@@ -326,12 +399,15 @@ async function generateWithImageProvider(
     throw new Error("GPT Image 2 API key is not configured");
   }
 
-  const prompt = buildGenerationPrompt(record, options, variationIndex);
+  const isRefinement = Boolean(options.refinementRequirement);
+  const initialReferences = isRefinement
+    ? { references: [], usedCanonical: false }
+    : await loadInitialReferenceImages(record, options);
   const referenceImages = [
-    ...(await loadReferenceImages(record)),
-    ...(await loadSelectedReferenceImages(options.selectedImagePath, options.selectedImageUrl)),
-    ...(await loadUserReferenceImages(options.referenceImagePath, options.referenceImageUrl)),
+    ...initialReferences.references,
+    ...(await loadSelectedReferenceImages(options, isRefinement)),
   ];
+  const prompt = buildGenerationPrompt(record, options, variationIndex, initialReferences.usedCanonical);
 
   const requestStartedAt = Date.now();
   const requestType = referenceImages.length > 0 ? "edit" : "generation";

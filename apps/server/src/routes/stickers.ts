@@ -356,7 +356,6 @@ stickersRouter.post("/:id/refine", async (req, res, next) => {
 
     const routeStartedAt = Date.now();
     logStickerRouteStep("refine_request_accepted", { recordId: record.id });
-    await deleteStickerRuntimeAssets(record.id);
     const generatingRecord = await updateStickerRecord(record.id, {
       status: "generating",
       error: undefined,
