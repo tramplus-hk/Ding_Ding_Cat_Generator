@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useId, useRef, useState } from "react";
 import type { StickerRecord } from "@sticker-platform/shared";
-import { acceptSticker, createSticker, generateSticker, listGallery, refineSticker, rejectSticker, removeGalleryItem, uploadReferenceImage } from "../lib/api";
+import { acceptSticker, createSticker, generateSticker, getCurrentSticker, getSticker, listGallery, refineSticker, rejectSticker, removeGalleryItem, uploadReferenceImage } from "../lib/api";
 import type { GalleryItem } from "../lib/api";
 
 export const FESTIVALS = [
@@ -300,6 +300,67 @@ export function GeneratePage() {
     return () => window.removeEventListener("keydown", handleEscape);
   }, [handleEscape]);
 
+  useEffect(() => {
+    let cancelled = false;
+
+    async function restoreCurrentRun() {
+      try {
+        const current = await getCurrentSticker();
+        if (cancelled || !current.record) return;
+
+        setRecord(current.record);
+        setDescription(current.record.description);
+        setFestivalId(current.record.theme === "general" ? "" : current.record.theme);
+        setSelectedPath(current.record.result?.selectedPath ?? current.record.result?.candidates?.[0] ?? null);
+        setBusy(current.record.status === "generating");
+        if (current.record.status === "failed") {
+          setError(current.record.error ?? "Generation failed");
+        }
+      } catch (caughtError) {
+        if (!cancelled) {
+          setError(caughtError instanceof Error ? caughtError.message : "Failed to restore current generation");
+        }
+      }
+    }
+
+    restoreCurrentRun();
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!record || record.status !== "generating") return;
+
+    let cancelled = false;
+    const interval = window.setInterval(async () => {
+      try {
+        const latest = await getSticker(record.id);
+        if (cancelled) return;
+
+        setRecord(latest);
+        setSelectedPath((current) => current ?? latest.result?.selectedPath ?? latest.result?.candidates?.[0] ?? null);
+        setBusy(latest.status === "generating");
+        if (latest.status === "generated") {
+          setMessage("Generation complete. Pick your favorite candidate.");
+        }
+        if (latest.status === "failed") {
+          setError(latest.error ?? "Generation failed");
+        }
+      } catch (caughtError) {
+        if (!cancelled) {
+          setError(caughtError instanceof Error ? caughtError.message : "Failed to refresh generation status");
+        }
+      }
+    }, 2_000);
+
+    return () => {
+      cancelled = true;
+      window.clearInterval(interval);
+    };
+  }, [record?.id, record?.status]);
+
   function handleDragEnter(e: React.DragEvent) {
     e.preventDefault();
     e.stopPropagation();
@@ -356,6 +417,7 @@ export function GeneratePage() {
     setShowRefinePanel(false);
     setShowRejectModal(false);
     setCandidatePreviews({});
+    let keepBusy = false;
 
     try {
       const createdRecord = await createSticker({ format: "svg", theme, description: prompt });
@@ -363,7 +425,7 @@ export function GeneratePage() {
       let refPath: string | undefined;
       let refUrl: string | undefined;
       if (pendingPhoto) {
-        const uploaded = await uploadReferenceImage(pendingPhoto.fileName, pendingPhoto.dataUrl, theme, prompt);
+        const uploaded = await uploadReferenceImage(pendingPhoto.fileName, pendingPhoto.dataUrl, theme, prompt, createdRecord.id);
         refPath = uploaded.path;
         refUrl = uploaded.blobPathname;
         setPendingPhoto(null);
@@ -375,6 +437,11 @@ export function GeneratePage() {
 
       setRecord(generatedRecord);
       setSelectedPath(generatedRecord.result?.selectedPath ?? generatedRecord.result?.candidates?.[0] ?? null);
+      keepBusy = generatedRecord.status === "generating";
+      setBusy(generatedRecord.status === "generating");
+      if (generatedRecord.status === "generating") {
+        setMessage("Generation started. You can close this browser and come back later.");
+      }
       const selected = generatedRecord.result?.selectedPath ?? generatedRecord.result?.candidates?.[0] ?? null;
       if (selected && candidatePreviews[selected]) {
         setHistory((prev) => [{
@@ -390,7 +457,7 @@ export function GeneratePage() {
     } catch (caughtError) {
       setError(caughtError instanceof Error ? caughtError.message : "Failed to generate sticker");
     } finally {
-      setBusy(false);
+      if (!keepBusy) setBusy(false);
     }
   }
 
@@ -402,6 +469,7 @@ export function GeneratePage() {
     setMessage(null);
     setBusy(true);
     setCandidatePreviews({});
+    let keepBusy = false;
 
     try {
       const generatedRecord = await generateSticker(record.id, (_current, _total, candidate, preview) => {
@@ -410,12 +478,18 @@ export function GeneratePage() {
 
       setRecord(generatedRecord);
       setSelectedPath(generatedRecord.result?.selectedPath ?? generatedRecord.result?.candidates?.[0] ?? null);
+      keepBusy = generatedRecord.status === "generating";
+      setBusy(generatedRecord.status === "generating");
       setRefinementRequirement("");
-      setMessage("Generated five new candidates.");
+      if (generatedRecord.status === "generating") {
+        setMessage("Generation started. You can close this browser and come back later.");
+      } else {
+        setMessage("Generated five new candidates.");
+      }
     } catch (caughtError) {
       setError(caughtError instanceof Error ? caughtError.message : "Failed to regenerate candidates");
     } finally {
-      setBusy(false);
+      if (!keepBusy) setBusy(false);
     }
   }
 
@@ -431,6 +505,7 @@ export function GeneratePage() {
     setMessage(null);
     setBusy(true);
     setCandidatePreviews({});
+    let keepBusy = false;
 
     try {
       const refinedRecord = await refineSticker(
@@ -446,12 +521,18 @@ export function GeneratePage() {
 
       setRecord(refinedRecord);
       setSelectedPath(refinedRecord.result?.selectedPath ?? refinedRecord.result?.candidates?.[0] ?? null);
+      keepBusy = refinedRecord.status === "generating";
+      setBusy(refinedRecord.status === "generating");
       setRefinementRequirement("");
-      setMessage("Refined into five new candidates. Pick one or refine again.");
+      if (refinedRecord.status === "generating") {
+        setMessage("Generation started. You can close this browser and come back later.");
+      } else {
+        setMessage("Refined into five new candidates. Pick one or refine again.");
+      }
     } catch (caughtError) {
       setError(caughtError instanceof Error ? caughtError.message : "Failed to refine selected candidate");
     } finally {
-      setBusy(false);
+      if (!keepBusy) setBusy(false);
     }
   }
 

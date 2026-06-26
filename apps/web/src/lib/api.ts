@@ -41,15 +41,21 @@ export function uploadReferenceImage(
   data: string,
   theme: string,
   description: string,
+  recordId?: string,
+  runId?: string,
 ): Promise<{ path: string; blobPathname?: string; notionPageId: string }> {
   return request<{ path: string; blobPathname?: string; notionPageId: string }>("/api/stickers/upload-reference", {
-    body: JSON.stringify({ fileName, data, theme, description }),
+    body: JSON.stringify({ fileName, data, theme, description, recordId, runId }),
     method: "POST",
   });
 }
 
 export function getSticker(id: string): Promise<StickerRecord> {
   return request<StickerRecord>(`/api/stickers/${id}`);
+}
+
+export function getCurrentSticker(): Promise<{ record: StickerRecord | null }> {
+  return request<{ record: StickerRecord | null }>("/api/stickers/current");
 }
 
 function isGenerationInProgress(record: StickerRecord): boolean {
@@ -89,13 +95,7 @@ export async function generateSticker(
   input?: { theme?: string; description?: string; referenceImagePath?: string; referenceImageUrl?: string },
 ): Promise<StickerRecord> {
   onProgress(0, 5, "");
-  const started = await startGeneration(id, input);
-
-  if (started.status === "generated" && started.result?.candidates?.length) {
-    return started;
-  }
-
-  return pollGeneratedSticker(id);
+  return startGeneration(id, input);
 }
 
 export async function refineSticker(
@@ -104,16 +104,10 @@ export async function refineSticker(
   onProgress: (current: number, total: number, candidate: string, preview?: string) => void,
 ): Promise<StickerRecord> {
   onProgress(0, 5, "");
-  const started = await request<StickerRecord>(`/api/stickers/${id}/refine`, {
+  return request<StickerRecord>(`/api/stickers/${id}/refine`, {
     body: JSON.stringify(input),
     method: "POST",
   });
-
-  if (started.status === "generated" && started.result?.candidates?.length) {
-    return started;
-  }
-
-  return pollGeneratedSticker(id);
 }
 
 export function rejectSticker(id: string, input?: { reason?: string }): Promise<{ rejected: true; notionPageId: string }> {

@@ -29,6 +29,14 @@ async function loadPollGeneratedSticker() {
 }
 
 describe("generation polling API", () => {
+  test("uploads reference images with optional runtime identifiers", async () => {
+    const source = await readFile(new URL("./api.ts", import.meta.url), "utf8");
+
+    assert.match(source, /recordId\?: string/);
+    assert.match(source, /runId\?: string/);
+    assert.match(source, /JSON\.stringify\(\{ fileName, data, theme, description, recordId, runId \}\)/);
+  });
+
   test("starts generation with a POST and polls the sticker record", async () => {
     const source = await readFile(new URL("./api.ts", import.meta.url), "utf8");
 
@@ -66,5 +74,12 @@ describe("generation polling API", () => {
     await assert.rejects(() => pollGeneratedSticker("sticker-1"), /Generation stopped with status approved/);
     assert.equal(pollCount, 2);
     assert.equal(waitCount, 1);
+  });
+
+  test("exports current sticker restore API", async () => {
+    const source = await readFile(new URL("./api.ts", import.meta.url), "utf8");
+
+    assert.match(source, /export function getCurrentSticker\(\): Promise<\{ record: StickerRecord \| null \}>/);
+    assert.match(source, /request<\{ record: StickerRecord \| null \}>\("\/api\/stickers\/current"\)/);
   });
 });
