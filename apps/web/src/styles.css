@@ -1813,6 +1813,13 @@ body {
   box-shadow: 0 12px 22px rgba(15, 25, 18, 0.05);
   color: var(--oliver-forest-dark);
   font-weight: 750;
+  transition: all 0.16s ease;
+}
+
+.secondary-cta:hover {
+  background: rgba(47, 139, 95, 0.06);
+  border-color: rgba(47, 139, 95, 0.3);
+  transform: translateY(-1px);
 }
 
 .quick-picks button {
@@ -1820,6 +1827,13 @@ body {
   color: var(--oliver-muted);
   font-size: 12px;
   padding: 9px 10px;
+  transition: all 0.16s ease;
+}
+
+.quick-picks button:hover {
+  color: var(--oliver-forest);
+  background: rgba(47, 139, 95, 0.08);
+  border-color: rgba(47, 139, 95, 0.25);
 }
 
 .prompt-row {
@@ -1845,6 +1859,13 @@ body {
   color: #fff;
   font-weight: 800;
   min-height: 58px;
+  transition: all 0.16s ease;
+}
+
+.primary-action:hover {
+  background: linear-gradient(180deg, var(--oliver-green), var(--oliver-forest));
+  box-shadow: 0 20px 40px rgba(31, 91, 69, 0.32);
+  transform: translateY(-1px);
 }
 
 .hint-strip {
@@ -1958,6 +1979,13 @@ body {
   background: #fff7f5;
   border: 1px solid #efcdc6;
   color: #a64839;
+  transition: all 0.16s ease;
+}
+
+.danger-cta:hover {
+  background: #fde8e3;
+  border-color: #d49e94;
+  transform: translateY(-1px);
 }
 
 .collapse-toggle {
@@ -2144,6 +2172,10 @@ body {
 .gen-select:focus {
   box-shadow: 0 0 0 5px var(--oliver-focus);
   border-color: rgba(47, 139, 95, 0.45);
+}
+
+.gen-select:hover {
+  border-color: rgba(47, 139, 95, 0.28);
 }
 
 .btn-generate {
@@ -2459,6 +2491,12 @@ body {
   font-size: 13px;
   font-weight: 650;
   padding: 8px 14px;
+  transition: all 0.16s ease;
+}
+
+.upload-remove-btn:hover {
+  background: #fde8e3;
+  border-color: #d49e94;
 }
 
 .hidden-input { display: none; }
