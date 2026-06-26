@@ -154,6 +154,19 @@ export function GeneratePage() {
   const selectedCandidate = selectedPath ?? record?.result?.selectedPath ?? record?.result?.candidates?.[0] ?? null;
   const resultImageUrl = selectedCandidate ? getCandidatePreviewUrl(record!, selectedCandidate, candidatePreviews) : null;
 
+  useEffect(() => {
+    try {
+      const saved = localStorage.getItem("refineHistory");
+      if (saved) setRefineHistory(JSON.parse(saved));
+    } catch { /* noop */ }
+  }, [setRefineHistory]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem("refineHistory", JSON.stringify(refineHistory));
+    } catch { /* noop */ }
+  }, [refineHistory]);
+
   function handleFestivalChange(value: string) {
     setFestivalId(value);
     if (!value) return;
@@ -324,12 +337,31 @@ export function GeneratePage() {
     setError(null);
     setMessage(null);
     setBusy(true);
+    previewsRef.current = {};
     setCandidatePreviews({});
 
     try {
-      const generatedRecord = await generateSticker(record.id, (_current, _total, candidate, preview) => {
-        if (preview) setCandidatePreviews((prev) => ({ ...prev, [candidate]: preview }));
-      }, { theme, description: record.description });
+      const newRecord = await createSticker({
+        format: record.format,
+        theme: record.theme,
+        description: record.description,
+      });
+
+      let refPath: string | undefined;
+      let refUrl: string | undefined;
+      if (pendingPhoto) {
+        const uploaded = await uploadReferenceImage(pendingPhoto.fileName, pendingPhoto.dataUrl, theme, record.description);
+        refPath = uploaded.path;
+        refUrl = uploaded.blobPathname;
+        setPendingPhoto(null);
+      }
+
+      const generatedRecord = await generateSticker(newRecord.id, (_current, _total, candidate, preview) => {
+        if (preview) {
+          previewsRef.current[candidate] = preview;
+          setCandidatePreviews((prev) => ({ ...prev, [candidate]: preview }));
+        }
+      }, { theme, description: record.description, referenceImagePath: refPath, referenceImageUrl: refUrl });
 
       setRecord(generatedRecord);
       setSelectedPath(generatedRecord.result?.selectedPath ?? generatedRecord.result?.candidates?.[0] ?? null);
@@ -362,11 +394,28 @@ export function GeneratePage() {
     setCandidatePreviews({});
 
     try {
+      const newRecord = await createSticker({
+        format: record.format,
+        theme: record.theme,
+        description: record.description,
+      });
+
+      let refPath: string | undefined;
+      let refUrl: string | undefined;
+      if (pendingPhoto) {
+        const uploaded = await uploadReferenceImage(pendingPhoto.fileName, pendingPhoto.dataUrl, record.theme, record.description);
+        refPath = uploaded.path;
+        refUrl = uploaded.blobPathname;
+        setPendingPhoto(null);
+      }
+
       const refinedRecord = await refineSticker(
-        record.id,
+        newRecord.id,
         {
           selectedPath: selectedCandidate,
           requirement: refinementRequirement.trim(),
+          referenceImagePath: refPath,
+          referenceImageUrl: refUrl,
         },
         (_current, _total, candidate, preview) => {
           if (preview) {
@@ -436,6 +485,13 @@ export function GeneratePage() {
   }
 
   function restoreFromHistory(item: typeof refineHistory[number]) {
+    console.log("restoreFromHistory", {
+      recordId: item.record?.id,
+      candidateCount: item.record?.result?.candidates?.length,
+      candidates: item.record?.result?.candidates,
+      previewKeys: Object.keys(item.previews),
+      previewCount: Object.keys(item.previews).length,
+    });
     setRecord(item.record);
     setCandidatePreviews(item.previews);
     setSelectedPath(item.record.result?.selectedPath ?? item.record.result?.candidates?.[0] ?? null);
@@ -678,6 +734,7 @@ export function GeneratePage() {
                     alt={item.description}
                     onDoubleClick={(e) => { e.stopPropagation(); setLightboxImage(item.previewUrl); }}
                   />
+                  <div className="thumb-id">{item.record?.id?.slice(0, 8)}</div>
                   <div className="thumb-label">{esc(item.description.slice(0, 25))}{item.description.length > 25 ? "…" : ""}</div>
                   <div className="thumb-subtitle">{esc(item.subtitle.slice(0, 30))}{item.subtitle.length > 30 ? "…" : ""}</div>
                 </button>

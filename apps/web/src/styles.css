@@ -2624,6 +2624,19 @@ body {
   display: block;
 }
 
+.refine-thumb .thumb-id {
+  position: absolute;
+  top: 4px;
+  left: 4px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: rgba(0, 0, 0, 0.55);
+  color: rgba(255, 255, 255, 0.7);
+  font-size: 8px;
+  font-weight: 400;
+  font-family: monospace;
+}
+
 .refine-thumb .thumb-label {
   position: absolute;
   bottom: 24px;
