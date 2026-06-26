@@ -5,9 +5,17 @@ import type { AddressInfo } from "node:net";
 import path from "node:path";
 import { describe, test } from "node:test";
 import { fileURLToPath } from "node:url";
-import app from "../app.js";
-import { config } from "../config.js";
-import { uploadReferenceSchema } from "./stickers.js";
+
+process.env.INNGEST_EVENT_KEY ??= "test-inngest-event-key";
+
+const [{ default: app }, { config }, { uploadReferenceSchema }, { inngest }] = await Promise.all([
+  import("../app.js"),
+  import("../config.js"),
+  import("./stickers.js"),
+  import("../services/generationJobs.js"),
+]);
+
+(inngest as unknown as { send: () => Promise<void> }).send = async () => undefined;
 
 const testPngBase64 =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPj/HwADBwIAMCbHYQAAAABJRU5ErkJggg==";
@@ -25,9 +33,13 @@ describe("uploadReferenceSchema", () => {
       data: `data:image/png;base64,${testPngBase64}`,
       theme: "lunar_new_year",
       description: "dancing cat",
+      recordId: "record-123",
+      runId: "run-456",
     });
 
     assert.equal(result.success, true);
+    assert.equal(result.data.recordId, "record-123");
+    assert.equal(result.data.runId, "run-456");
   });
 
   test("rejects payloads missing required fields", () => {
@@ -109,7 +121,7 @@ describe("POST /api/stickers/upload-reference", () => {
 });
 
 describe("POST /api/stickers/:id/generate", () => {
-  test("returns the generated record after generation completes", async () => {
+  test("returns a generating record after enqueueing generation", async () => {
     const originalImageGenerationApiKey = config.imageGenerationApiKey;
     const originalImageGenerationCandidateCount = config.imageGenerationCandidateCount;
     config.imageGenerationApiKey = "";
@@ -137,11 +149,11 @@ describe("POST /api/stickers/:id/generate", () => {
         headers: { "Content-Type": "application/json" },
       });
 
-      assert.equal(generateResponse.status, 200);
+      assert.equal(generateResponse.status, 202);
       assert.match(generateResponse.headers.get("content-type") ?? "", /application\/json/);
       const generatedRecord = (await generateResponse.json()) as { status: string; result?: { candidates?: string[] } };
-      assert.equal(generatedRecord.status, "generated");
-      assert.equal(generatedRecord.result?.candidates?.length, 5);
+      assert.equal(generatedRecord.status, "generating");
+      assert.equal(generatedRecord.result?.candidates?.length, 0);
     } finally {
       config.imageGenerationApiKey = originalImageGenerationApiKey;
       config.imageGenerationCandidateCount = originalImageGenerationCandidateCount;
@@ -175,11 +187,11 @@ describe("POST /api/stickers/:id/generate", () => {
         method: "POST",
         headers: { "Content-Type": "application/json" },
       });
-      assert.equal(generateResponse.status, 200);
+      assert.equal(generateResponse.status, 202);
       const generatedRecord = (await generateResponse.json()) as { status: string; result?: { candidates?: string[]; candidatePreviews?: Record<string, string> } };
 
-      assert.equal(generatedRecord.status, "generated");
-      assert.equal(generatedRecord.result?.candidates?.length, 5);
+      assert.equal(generatedRecord.status, "generating");
+      assert.equal(generatedRecord.result?.candidates?.length, 0);
       assert.equal(generatedRecord.result?.candidatePreviews, undefined);
     } finally {
       config.imageGenerationApiKey = originalImageGenerationApiKey;
@@ -216,12 +228,11 @@ describe("POST /api/stickers/:id/generate", () => {
         headers: { "Content-Type": "application/json" },
       });
 
-      assert.equal(generateResponse.status, 200);
-      const generatedRecord = (await generateResponse.json()) as { status: string; result?: { candidates?: string[] } };
+      assert.equal(generateResponse.status, 202);
+      const generatedRecord = (await generateResponse.json()) as { status: string; result?: { candidates?: string[]; selectedPath?: string } };
 
-      assert.equal(generatedRecord.status, "generated");
-      const selectedPath = generatedRecord.result?.candidates?.[0];
-      assert.ok(selectedPath);
+      assert.equal(generatedRecord.status, "generating");
+      const selectedPath = ".runtime/generated/async_refine_route/polls_refined_result/trial-test/candidate-01.svg";
 
       const refineResponse = await fetch(`${baseUrl}/api/stickers/${record.id}/refine`, {
         method: "POST",
@@ -231,12 +242,13 @@ describe("POST /api/stickers/:id/generate", () => {
           requirement: "make it extra polished",
         }),
       });
-      assert.equal(refineResponse.status, 200);
+      assert.equal(refineResponse.status, 202);
       assert.match(refineResponse.headers.get("content-type") ?? "", /application\/json/);
       const refinedRecord = (await refineResponse.json()) as { status: string; result?: { candidates?: string[]; selectedPath?: string } };
 
-      assert.equal(refinedRecord.status, "generated");
-      assert.equal(refinedRecord.result?.candidates?.length, 5);
+      assert.equal(refinedRecord.status, "generating");
+      assert.equal(refinedRecord.result?.candidates?.length, 0);
+      assert.equal(refinedRecord.result?.selectedPath, selectedPath);
     } finally {
       config.imageGenerationApiKey = originalImageGenerationApiKey;
       config.imageGenerationCandidateCount = originalImageGenerationCandidateCount;

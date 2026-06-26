@@ -1,11 +1,12 @@
 import { createStickerSchema } from "@sticker-platform/shared";
 import { Router } from "express";
+import { randomUUID } from "node:crypto";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { z } from "zod";
 import { config } from "../config.js";
-import { generateSticker } from "../services/imageGeneration.js";
+import { sendGenerationRun } from "../services/generationJobs.js";
 import { archiveNotionPage, getAvailableNotionContentName, getFilePropertyUrl, getRichTextProperty, listDataFolderRows, uploadAcceptedStickerRecord, uploadDataFolderFile, uploadRejectedStickerRun } from "../services/notion.js";
 import {
   createStickerRecord,
@@ -15,7 +16,7 @@ import {
   listStickerRecords,
   updateStickerRecord,
 } from "../services/stickerStorage.js";
-import { readRuntimeBlob, uploadRuntimeReferenceBlob } from "../services/runtimeBlob.js";
+import { cleanupStaleRuntimeBlobs, clearCurrentRunBlob, deleteRuntimeAssetsExceptCurrent, readCurrentRunBlob, readRuntimeBlob, uploadRuntimeReferenceBlob, writeCurrentRunBlob } from "../services/runtimeBlob.js";
 
 type StickerRecord = Awaited<ReturnType<typeof getStickerRecord>> extends infer T ? NonNullable<T> : never;
 
@@ -35,47 +36,6 @@ function logStickerRouteError(step: string, error: unknown, fields: Record<strin
   console.error(`[sticker-route] ${step} ${new Date().toISOString()}${details ? ` ${details}` : ""}`, error);
 }
 
-function getErrorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
-
-async function runGeneration(
-  record: StickerRecord,
-  options: Parameters<typeof generateSticker>[1],
-  mode: "generate" | "refine",
-): Promise<StickerRecord> {
-  logStickerRouteStep("background_generation_started", {
-    recordId: record.id,
-    mode,
-    count: config.imageGenerationCandidateCount,
-    refinement: Boolean(options?.refinementRequirement),
-  });
-
-  try {
-    const result = await generateSticker(record, options);
-    const generatedRecord = await updateStickerRecord(record.id, {
-      status: "generated",
-      result,
-      error: undefined,
-    });
-    logStickerRouteStep("background_generation_completed", {
-      recordId: record.id,
-      mode,
-      candidates: result.candidates?.length ?? 0,
-    });
-    return generatedRecord;
-  } catch (error) {
-    logStickerRouteError("background_generation_failed", error, { recordId: record.id, mode });
-    await updateStickerRecord(record.id, {
-      status: "failed",
-      error: getErrorMessage(error),
-    }).catch((updateError) => {
-      logStickerRouteError("background_generation_status_update_failed", updateError, { recordId: record.id, mode });
-    });
-    throw error;
-  }
-}
-
 export const stickersRouter = Router();
 const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../../..");
 const runtimeGeneratedRoot = config.runtimeGeneratedRoot;
@@ -88,6 +48,8 @@ export const uploadReferenceSchema = z.object({
   data: z.string().min(1),
   theme: z.string().min(1),
   description: z.string().min(1),
+  recordId: z.string().min(1).optional(),
+  runId: z.string().min(1).optional(),
 });
 
 const generateStickerInputSchema = z.object({
@@ -112,6 +74,73 @@ const acceptStickerSchema = z.object({
 const rejectStickerSchema = z.object({
   reason: z.string().optional(),
 });
+
+async function enqueueGenerationRun(
+  record: StickerRecord,
+  input: {
+    mode: "generate" | "refine";
+    referenceImagePath?: string;
+    referenceImageUrl?: string;
+    selectedImagePath?: string;
+    selectedImageUrl?: string;
+    refinementRequirement?: string;
+  },
+): Promise<StickerRecord> {
+  const runId = randomUUID();
+  await cleanupStaleRuntimeBlobs();
+  const result = record.result
+    ? {
+        ...record.result,
+        runId,
+        candidates: [],
+        candidateUrls: {},
+        candidateErrors: {},
+        requestedCandidateCount: config.imageGenerationCandidateCount,
+        refinementRequirement: input.refinementRequirement,
+        selectedPath: input.selectedImagePath ?? record.result.selectedPath,
+      }
+    : {
+        provider: config.imageGenerationApiKey ? "gpt-image-2" as const : "placeholder" as const,
+        format: record.format,
+        runId,
+        candidates: [],
+        candidateUrls: {},
+        candidateErrors: {},
+        requestedCandidateCount: config.imageGenerationCandidateCount,
+        refinementRequirement: input.refinementRequirement,
+      };
+
+  const generatingRecord = await updateStickerRecord(record.id, {
+    status: "generating",
+    error: undefined,
+    result,
+  });
+  const referenceBody = input.referenceImageUrl ? await readRuntimeBlob(input.referenceImageUrl) : undefined;
+  const referenceImageUrl = referenceBody
+    ? await uploadRuntimeReferenceBlob(
+        record.id,
+        input.referenceImagePath ?? input.referenceImageUrl!,
+        referenceBody,
+        runId,
+      )
+    : input.referenceImageUrl;
+
+  await writeCurrentRunBlob({ recordId: record.id, runId });
+  await deleteRuntimeAssetsExceptCurrent({ recordId: record.id, runId });
+  await sendGenerationRun({
+    recordId: record.id,
+    runId,
+    mode: input.mode,
+    count: config.imageGenerationCandidateCount,
+    referenceImagePath: input.referenceImagePath,
+    referenceImageUrl,
+    selectedImagePath: input.selectedImagePath,
+    selectedImageUrl: input.selectedImageUrl,
+    refinementRequirement: input.refinementRequirement,
+  });
+
+  return generatingRecord;
+}
 
 function assertGeneratedPath(relativePath: string): string {
   const absolutePath = relativePath.startsWith(".runtime/generated/")
@@ -196,8 +225,8 @@ stickersRouter.post("/upload-reference", async (req, res, next) => {
       : path.relative(projectRoot, filePath).replace(/\\/g, "/");
     const themeSlug = slugify(input.theme);
     const descriptionSlug = slugify(input.description);
-    const recordKey = `${themeSlug}-${descriptionSlug}`;
-    const blobPathname = await uploadRuntimeReferenceBlob(recordKey, relativePath, body);
+    const recordKey = input.recordId ?? `${themeSlug}-${descriptionSlug}`;
+    const blobPathname = await uploadRuntimeReferenceBlob(recordKey, relativePath, body, input.runId);
 
     const contentName = await getAvailableNotionContentName("reference", themeSlug, descriptionSlug, safeExtension);
     const notionPageId = await uploadDataFolderFile({
@@ -388,6 +417,39 @@ stickersRouter.post("/gallery/remove", async (req, res, next) => {
   }
 });
 
+stickersRouter.get("/current", async (_req, res, next) => {
+  try {
+    const current = await readCurrentRunBlob();
+    if (!current) {
+      res.json({ record: null });
+      return;
+    }
+
+    const record = await getStickerRecord(current.recordId);
+    if (!record) {
+      await clearCurrentRunBlob(current);
+      res.json({ record: null });
+      return;
+    }
+
+    if (record.result?.runId !== current.runId) {
+      await clearCurrentRunBlob(current);
+      res.json({ record: null });
+      return;
+    }
+
+    if (record.status === "accepted" || record.status === "uploaded" || record.status === "rejected") {
+      await clearCurrentRunBlob(current);
+      res.json({ record: null });
+      return;
+    }
+
+    res.json({ record: withoutCandidatePreviews(record) });
+  } catch (error) {
+    next(error);
+  }
+});
+
 stickersRouter.get("/:id", async (req, res, next) => {
   try {
     const record = await getStickerRecord(req.params.id);
@@ -420,15 +482,13 @@ stickersRouter.post("/:id/generate", async (req, res, next) => {
     const routeStartedAt = Date.now();
     logStickerRouteStep("generate_request_accepted", { recordId: record.id, theme: record.theme });
     await deleteStickerRuntimeAssets(record.id);
-    await updateStickerRecord(record.id, { status: "generating", error: undefined, result: undefined });
-    logStickerRouteStep("generate_record_marked_generating", { recordId: record.id });
-    const generatedRecord = await runGeneration(record, {
-      count: config.imageGenerationCandidateCount,
+    const generatingRecord = await enqueueGenerationRun(record, {
+      mode: "generate",
       referenceImagePath: input.referenceImagePath,
       referenceImageUrl: input.referenceImageUrl,
-    }, "generate");
+    });
     logStickerRouteStep("generate_response_sent", { recordId: record.id, elapsedMs: Date.now() - routeStartedAt });
-    res.json(withoutCandidatePreviews(generatedRecord));
+    res.status(202).json(withoutCandidatePreviews(generatingRecord));
   } catch (error) {
     logStickerRouteError("generate_failed", error, { recordId: req.params.id });
     next(error);
@@ -449,22 +509,16 @@ stickersRouter.post("/:id/refine", async (req, res, next) => {
 
     const routeStartedAt = Date.now();
     logStickerRouteStep("refine_request_accepted", { recordId: record.id });
-    await updateStickerRecord(record.id, {
-      status: "generating",
-      error: undefined,
-      result: record.result ? { ...record.result, selectedPath: input.selectedPath } : undefined,
-    });
-    logStickerRouteStep("refine_record_marked_generating", { recordId: record.id });
-    const generatedRecord = await runGeneration(record, {
-      count: config.imageGenerationCandidateCount,
+    const generatingRecord = await enqueueGenerationRun(record, {
+      mode: "refine",
       selectedImagePath: input.selectedPath,
       selectedImageUrl: record.result?.candidateUrls?.[input.selectedPath],
       refinementRequirement: input.requirement,
       referenceImagePath: input.referenceImagePath,
       referenceImageUrl: input.referenceImageUrl,
-    }, "refine");
+    });
     logStickerRouteStep("refine_response_sent", { recordId: record.id, elapsedMs: Date.now() - routeStartedAt });
-    res.json(withoutCandidatePreviews(generatedRecord));
+    res.status(202).json(withoutCandidatePreviews(generatingRecord));
   } catch (error) {
     logStickerRouteError("refine_failed", error, { recordId: req.params.id });
     next(error);
@@ -519,6 +573,9 @@ stickersRouter.post("/:id/accept", async (req, res, next) => {
     });
 
     await deleteStickerCache(uploaded.id);
+    if (record.result?.runId) {
+      await clearCurrentRunBlob({ recordId: record.id, runId: record.result.runId });
+    }
 
     res.json({ uploaded: true, notionPageId, record: uploaded });
   } catch (error) {
@@ -540,6 +597,9 @@ stickersRouter.post("/:id/reject", async (req, res, next) => {
     const notionPageId = await uploadRejectedStickerRun(withoutCandidatePreviews(rejected), input.reason?.trim() || undefined);
 
     await deleteStickerCache(rejected.id);
+    if (record.result?.runId) {
+      await clearCurrentRunBlob({ recordId: record.id, runId: record.result.runId });
+    }
 
     res.json({ rejected: true, notionPageId });
   } catch (error) {
